@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "Token 用量统计"
+  },
+  "pages": {
+    "dashboard": {
+      "title": "Token 用量看板",
+      "description": "全局大模型 Token 消耗监控与可视化分析"
+    }
+  }
+}

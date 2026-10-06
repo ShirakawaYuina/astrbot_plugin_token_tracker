@@ -1,0 +1,33 @@
+{
+    "tracker": {
+        "description": "Token 追踪设置",
+        "hint": "配置全局 Token 用量监控与统计参数。",
+        "type": "object",
+        "items": {
+            "enable": {
+                "description": "启用追踪",
+                "hint": "是否启用全局 Token 用量统计（覆盖核心对话及所有插件）。",
+                "type": "bool",
+                "default": true
+            },
+            "record_streaming": {
+                "description": "统计流式调用",
+                "hint": "是否对流式调用（Streaming）累加并捕获 Token 消耗。",
+                "type": "bool",
+                "default": true
+            },
+            "estimate_when_missing": {
+                "description": "未返回用量时估算兜底",
+                "hint": "当少数第三方中转或定制 API 未回传 usage 字段时，自动基于字符与分词规则估算 Token。",
+                "type": "bool",
+                "default": true
+            },
+            "currency_symbol": {
+                "description": "费用币种符号",
+                "hint": "在看板中展示费用时使用的币种前缀（如 ¥ 或 $）。",
+                "type": "string",
+                "default": "¥"
+            }
+        }
+    }
+}

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Token 用量看板</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./chart.umd.js"></script>
+</head>
+<body class="dashboard-body">
+  <div class="dashboard-container">
+    <!-- Header -->
+    <header class="dashboard-header">
+      <div class="header-titles">
+        <h1 class="header-title">📊 Token 用量看板</h1>
+        <p class="header-desc">全局监控 AstrBot 对话及各插件的大模型 Token 消耗与费用折算</p>
+      </div>
+      <div class="header-actions">
+        <button id="btn-refresh" class="btn btn-secondary">🔄 刷新</button>
+        <button id="btn-export" class="btn btn-primary">📥 导出 CSV</button>
+        <button id="btn-clear" class="btn btn-danger">🗑️ 清空数据</button>
+      </div>
+    </header>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">今日 Token 消耗</div>
+        <div class="kpi-value" id="kpi-today-tokens">-</div>
+        <div class="kpi-sub" id="kpi-today-sub">预估费用: -</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">今日调用次数</div>
+        <div class="kpi-value" id="kpi-today-calls">-</div>
+        <div class="kpi-sub" id="kpi-today-avg-time">平均耗时: - ms</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">历史累计 Token</div>
+        <div class="kpi-value" id="kpi-total-tokens">-</div>
+        <div class="kpi-sub" id="kpi-total-sub">累计调用: - 次</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">缓存命中 Token</div>
+        <div class="kpi-value" id="kpi-cached-tokens">-</div>
+        <div class="kpi-sub" id="kpi-cached-rate">缓存率: -</div>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="charts-row">
+      <div class="chart-box">
+        <h3 class="box-title">🤖 各模型消耗占比</h3>
+        <div class="chart-canvas-wrapper">
+          <canvas id="modelPieChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-box">
+        <h3 class="box-title">📈 近 14 天用量趋势</h3>
+        <div class="chart-canvas-wrapper">
+          <canvas id="trendLineChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rankings Row -->
+    <div class="ranks-row">
+      <div class="rank-box">
+        <h3 class="box-title">🏆 热门模型排行</h3>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>模型名称</th>
+                <th>总 Tokens</th>
+                <th>调用次数</th>
+                <th>占比</th>
+              </tr>
+            </thead>
+            <tbody id="models-table-body">
+              <tr><td colspan="4" class="text-center">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rank-box">
+        <h3 class="box-title">🧩 调用来源 / 插件排行</h3>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>来源名称</th>
+                <th>类型</th>
+                <th>总 Tokens</th>
+                <th>调用次数</th>
+              </tr>
+            </thead>
+            <tbody id="callers-table-body">
+              <tr><td colspan="4" class="text-center">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail Records Table -->
+    <div class="records-box">
+      <div class="records-header">
+        <h3 class="box-title">📝 调用明细流水</h3>
+        <div class="records-filter-group">
+          <input type="text" id="filter-keyword" class="form-input" placeholder="搜索模型/插件/会话...">
+          <button id="btn-search" class="btn btn-secondary">🔍 筛选</button>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>时间</th>
+              <th>模型</th>
+              <th>来源</th>
+              <th>输入</th>
+              <th>输出</th>
+              <th>缓存</th>
+              <th>总计</th>
+              <th>耗时</th>
+              <th>模式</th>
+            </tr>
+          </thead>
+          <tbody id="records-table-body">
+            <tr><td colspan="10" class="text-center">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pagination-bar">
+        <span class="pagination-info" id="pagination-info">第 1 页</span>
+        <div class="pagination-actions">
+          <button id="btn-prev" class="btn btn-sm btn-secondary">上一页</button>
+          <button id="btn-next" class="btn btn-sm btn-secondary">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
