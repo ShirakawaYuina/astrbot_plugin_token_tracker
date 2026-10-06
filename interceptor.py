@@ -13,6 +13,11 @@ from astrbot.api import logger
 from astrbot.api.provider import Provider
 from astrbot.core.provider.entities import LLMResponse
 
+try:
+    from astrbot.core.provider.provider import EmbeddingProvider
+except Exception:
+    EmbeddingProvider = None
+
 from .plugin_config import PluginConfig
 from .tracker_store import TrackerStore
 
@@ -23,7 +28,7 @@ _IS_TRACKING: contextvars.ContextVar[bool] = contextvars.ContextVar("token_track
 
 
 def _identify_caller() -> tuple[str, str]:
-    """通过调用栈自动识别调用方是主对话还是具体某个第三方插件"""
+    """通过调用栈自动识别调用方是主对话、知识库还是具体某个第三方插件（如 livingmemory）"""
     try:
         stack = inspect.stack()
         for frame_info in stack[2:20]:
@@ -47,8 +52,11 @@ def _identify_caller() -> tuple[str, str]:
                     "astrbot/core/conversation",
                     "astrbot/core/pipeline",
                     "astrbot/core/star",
+                    "knowledge_base",
                 ]
             ):
+                if "knowledge_base" in fn:
+                    return "knowledge_base", "kb_rag"
                 return "conversation", "core_chat"
     except Exception:
         pass
@@ -157,7 +165,7 @@ def _extract_usage_from_response(
 def _resolve_model_and_provider(
     self: Any, kwargs: dict[str, Any], resp: Any = None
 ) -> tuple[str, str]:
-    """安全解析模型名称与 Provider ID"""
+    """安全解析 LLM 对话模型名称与 Provider ID"""
     model_name = (
         kwargs.get("model")
         or (getattr(self, "get_model", None)() if callable(getattr(self, "get_model", None)) else None)
@@ -196,8 +204,44 @@ def _resolve_model_and_provider(
     return str(model_name), str(provider_id)
 
 
+def _resolve_embedding_model_and_provider(self: Any) -> tuple[str, str]:
+    """安全解析 Embedding 向量模型的名称与 Provider ID"""
+    model_name = (
+        getattr(self, "model", None)
+        or (getattr(self, "get_model", None)() if callable(getattr(self, "get_model", None)) else None)
+        or getattr(self, "model_name", None)
+        or (
+            self.provider_config.get("embedding_model")
+            if hasattr(self, "provider_config") and isinstance(self.provider_config, dict)
+            else None
+        )
+        or (
+            self.provider_config.get("model")
+            if hasattr(self, "provider_config") and isinstance(self.provider_config, dict)
+            else None
+        )
+        or "unknown_embedding_model"
+    )
+
+    provider_id = (
+        getattr(self, "provider_id", None)
+        or (
+            self.provider_config.get("id")
+            if hasattr(self, "provider_config") and isinstance(self.provider_config, dict)
+            else None
+        )
+        or (
+            self.provider_config.get("type")
+            if hasattr(self, "provider_config") and isinstance(self.provider_config, dict)
+            else None
+        )
+        or "default"
+    )
+    return str(model_name), str(provider_id)
+
+
 def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
-    """挂载全局切面拦截器至 Provider 基类及所有具体提供商实现子类"""
+    """挂载全局切面拦截器至 LLM 对话 Provider 及 EmbeddingProvider 基类与所有具体提供商子类"""
     global _PATCHED_METHODS
 
     if _PATCHED_METHODS:
@@ -214,31 +258,39 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
     except Exception as e:
         logger.debug(f"token-tracker | load provider sources: {e}")
 
-    # 2. 递归收集 Provider 及其所有继承子类
-    target_classes: list[type] = [Provider]
-    seen: set[type] = {Provider}
+    # 2. 递归收集对话 Provider 及其所有继承子类
+    chat_classes: list[type] = [Provider]
+    seen_chat: set[type] = {Provider}
 
-    def _recurse_subclasses(cls: type):
+    def _recurse_subclasses(cls: type, target_list: list[type], seen_set: set[type]):
         for sub in cls.__subclasses__():
-            if sub not in seen:
-                seen.add(sub)
-                target_classes.append(sub)
-                _recurse_subclasses(sub)
+            if sub not in seen_set:
+                seen_set.add(sub)
+                target_list.append(sub)
+                _recurse_subclasses(sub, target_list, seen_set)
 
-    _recurse_subclasses(Provider)
+    _recurse_subclasses(Provider, chat_classes, seen_chat)
 
-    # 3. 收集注册表中的所有提供商类
+    # 收集注册表中的所有提供商类
     try:
         from astrbot.core.provider.register import provider_cls_map
         for pm in provider_cls_map.values():
-            if pm.cls_type and pm.cls_type not in seen:
-                seen.add(pm.cls_type)
-                target_classes.append(pm.cls_type)
+            if pm.cls_type and pm.cls_type not in seen_chat:
+                seen_chat.add(pm.cls_type)
+                chat_classes.append(pm.cls_type)
     except Exception:
         pass
 
-    # 4. 对定义了核心调用方法的类安装 AOP 拦截器
-    for cls in target_classes:
+    # 3. 递归收集 EmbeddingProvider 及其所有继承子类
+    embedding_classes: list[type] = []
+    seen_embedding: set[type] = set()
+    if EmbeddingProvider is not None:
+        embedding_classes.append(EmbeddingProvider)
+        seen_embedding.add(EmbeddingProvider)
+        _recurse_subclasses(EmbeddingProvider, embedding_classes, seen_embedding)
+
+    # 4. 对定义了对话方法的类安装 AOP 拦截器
+    for cls in chat_classes:
         # Patch text_chat
         if "text_chat" in cls.__dict__:
             orig_chat = cls.__dict__["text_chat"]
@@ -377,6 +429,113 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
 
             cls.text_chat_stream = _make_stream_wrapper(orig_stream)
 
+    # 5. 对定义了向量化方法的 Embedding 类安装 AOP 拦截器（如 livingmemory / 知识库）
+    for cls in embedding_classes:
+        # Patch get_embedding
+        if "get_embedding" in cls.__dict__:
+            orig_ge = cls.__dict__["get_embedding"]
+            _PATCHED_METHODS[(cls, "get_embedding")] = orig_ge
+
+            def _make_embedding_wrapper(original_fn: Any):
+                async def patched_get_embedding(self: Any, text: str, *args: Any, **kwargs: Any) -> list[float]:
+                    cfg: PluginConfig = get_cfg()
+                    if (
+                        not cfg.tracker.enable
+                        or not getattr(cfg.tracker, "record_embedding", True)
+                        or _IS_TRACKING.get()
+                    ):
+                        return await original_fn(self, text, *args, **kwargs)
+
+                    token = _IS_TRACKING.set(True)
+                    start_time = time.time()
+                    caller_type, caller_name = _identify_caller()
+
+                    try:
+                        res = await original_fn(self, text, *args, **kwargs)
+                        duration_ms = (time.time() - start_time) * 1000.0
+
+                        model_name, provider_id = _resolve_embedding_model_and_provider(self)
+                        prompt_tok = _estimate_tokens(str(text or ""))
+
+                        if prompt_tok > 0:
+                            asyncio.create_task(
+                                store.record_usage(
+                                    model=model_name,
+                                    provider_id=provider_id,
+                                    caller_type=caller_type,
+                                    caller_name=caller_name,
+                                    session_id="",
+                                    is_streaming=False,
+                                    is_estimated=True,
+                                    prompt_tokens=prompt_tok,
+                                    completion_tokens=0,
+                                    cached_tokens=0,
+                                    total_tokens=prompt_tok,
+                                    duration_ms=duration_ms,
+                                )
+                            )
+                        return res
+                    finally:
+                        _IS_TRACKING.reset(token)
+
+                return patched_get_embedding
+
+            cls.get_embedding = _make_embedding_wrapper(orig_ge)
+
+        # Patch get_embeddings (批量向量化)
+        if "get_embeddings" in cls.__dict__:
+            orig_ges = cls.__dict__["get_embeddings"]
+            _PATCHED_METHODS[(cls, "get_embeddings")] = orig_ges
+
+            def _make_embeddings_wrapper(original_fn: Any):
+                async def patched_get_embeddings(
+                    self: Any, text: list[str], *args: Any, **kwargs: Any
+                ) -> list[list[float]]:
+                    cfg: PluginConfig = get_cfg()
+                    if (
+                        not cfg.tracker.enable
+                        or not getattr(cfg.tracker, "record_embedding", True)
+                        or _IS_TRACKING.get()
+                    ):
+                        return await original_fn(self, text, *args, **kwargs)
+
+                    token = _IS_TRACKING.set(True)
+                    start_time = time.time()
+                    caller_type, caller_name = _identify_caller()
+
+                    try:
+                        res = await original_fn(self, text, *args, **kwargs)
+                        duration_ms = (time.time() - start_time) * 1000.0
+
+                        model_name, provider_id = _resolve_embedding_model_and_provider(self)
+                        texts = text if isinstance(text, list) else [text]
+                        prompt_tok = sum(_estimate_tokens(str(t or "")) for t in texts)
+
+                        if prompt_tok > 0:
+                            asyncio.create_task(
+                                store.record_usage(
+                                    model=model_name,
+                                    provider_id=provider_id,
+                                    caller_type=caller_type,
+                                    caller_name=caller_name,
+                                    session_id="",
+                                    is_streaming=False,
+                                    is_estimated=True,
+                                    prompt_tokens=prompt_tok,
+                                    completion_tokens=0,
+                                    cached_tokens=0,
+                                    total_tokens=prompt_tok,
+                                    duration_ms=duration_ms,
+                                )
+                            )
+                        return res
+                    finally:
+                        _IS_TRACKING.reset(token)
+
+                return patched_get_embeddings
+
+            cls.get_embeddings = _make_embeddings_wrapper(orig_ges)
+
     logger.info(
         f"token-tracker | Global Provider AOP interceptor installed on {len(_PATCHED_METHODS)} methods across: "
         f"{', '.join(sorted({c.__name__ for c, _ in _PATCHED_METHODS.keys()}))}"
@@ -384,7 +543,7 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
 
 
 def uninstall_interceptor() -> None:
-    """还原所有被拦截的 Provider 类方法"""
+    """还原所有被拦截的 Provider 和 EmbeddingProvider 类方法"""
     global _PATCHED_METHODS
 
     if not _PATCHED_METHODS:

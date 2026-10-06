@@ -16,6 +16,12 @@
                 "type": "bool",
                 "default": true
             },
+            "record_embedding": {
+                "description": "统计向量嵌入模型",
+                "hint": "是否统计向量嵌入模型 (Embedding) 的 Token 消耗（如 livingmemory 记忆检索、知识库召回等）。",
+                "type": "bool",
+                "default": true
+            },
             "estimate_when_missing": {
                 "description": "未返回用量时估算兜底",
                 "hint": "当少数第三方中转或定制 API 未回传 usage 字段时，自动基于字符与分词规则估算 Token。",

@@ -16,6 +16,7 @@ def test_default_config():
     assert isinstance(cfg, PluginConfig)
     assert cfg.tracker.enable is True
     assert cfg.tracker.record_streaming is True
+    assert cfg.tracker.record_embedding is True
     assert cfg.tracker.estimate_when_missing is True
     assert cfg.webui.enable is True
     assert cfg.webui.port == 6186
@@ -27,6 +28,7 @@ def test_custom_config():
         "tracker": {
             "enable": False,
             "record_streaming": False,
+            "record_embedding": False,
             "estimate_when_missing": False,
         },
         "webui": {
@@ -46,6 +48,7 @@ def test_custom_config():
     cfg = parse_plugin_config(custom)
     assert cfg.tracker.enable is False
     assert cfg.tracker.record_streaming is False
+    assert cfg.tracker.record_embedding is False
     assert cfg.tracker.estimate_when_missing is False
     assert cfg.webui.port == 6188
     assert cfg.webui.access_password == "custom_password_123"

@@ -169,3 +169,64 @@ async def test_subclass_interception():
         assert call_kwargs["total_tokens"] == 45
     finally:
         uninstall_interceptor()
+
+
+@pytest.mark.asyncio
+async def test_embedding_interception():
+    from astrbot.core.provider.provider import EmbeddingProvider
+
+    class MockEmbeddingProvider(EmbeddingProvider):
+        def __init__(self):
+            self.model = "text-embedding-v3-small"
+            self.provider_config = {"id": "test-embed-id", "embedding_model": "text-embedding-v3-small"}
+
+        def get_dim(self):
+            return 1536
+
+        async def get_embeddings(self, text: list[str]) -> list[list[float]]:
+            return [[0.1] * 1536 for _ in text]
+
+        async def get_embedding(self, text: str) -> list[float]:
+            # 常见子类实现：get_embedding 内部调用 get_embeddings
+            res = await self.get_embeddings([text])
+            return res[0]
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+
+    cfg = PluginConfig()
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        inst = MockEmbeddingProvider()
+        
+        # 1. 单条向量化
+        vec = await inst.get_embedding("这是一段测试嵌入的文本内容")
+        assert len(vec) == 1536
+        await asyncio.sleep(0.05)
+
+        # 验证防重入：只记录 1 次
+        assert mock_store.record_usage.call_count == 1
+        call_kwargs = mock_store.record_usage.call_args.kwargs
+        assert call_kwargs["model"] == "text-embedding-v3-small"
+        assert call_kwargs["provider_id"] == "test-embed-id"
+        assert call_kwargs["prompt_tokens"] >= 10
+        assert call_kwargs["completion_tokens"] == 0
+        assert call_kwargs["total_tokens"] == call_kwargs["prompt_tokens"]
+        assert call_kwargs["is_estimated"] is True
+
+        # 2. 批量向量化
+        mock_store.record_usage.reset_mock()
+        vecs = await inst.get_embeddings(["apple", "banana", "cherry"])
+        assert len(vecs) == 3
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.call_count == 1
+        call_kwargs2 = mock_store.record_usage.call_args.kwargs
+        assert call_kwargs2["model"] == "text-embedding-v3-small"
+        assert call_kwargs2["prompt_tokens"] > 0
+        assert call_kwargs2["completion_tokens"] == 0
+    finally:
+        uninstall_interceptor()
+

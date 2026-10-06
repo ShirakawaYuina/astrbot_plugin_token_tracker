@@ -300,7 +300,15 @@ async function loadRecords(page = 1) {
     }
 
     tbody.innerHTML = items.map((r) => {
-      const modeBadge = r.is_streaming ? '<span class="badge badge-blue">流式</span>' : '<span class="badge badge-gray">常规</span>';
+      let modeBadge = r.is_streaming ? '<span class="badge badge-blue">流式</span>' : '<span class="badge badge-gray">常规</span>';
+      const mLower = String(r.model || "").toLowerCase();
+      const pLower = String(r.provider_id || "").toLowerCase();
+      const cLower = String(r.caller_name || "").toLowerCase();
+      if (!r.is_streaming && r.completion_tokens === 0 && (
+        mLower.includes("embed") || pLower.includes("embed") || cLower.includes("livingmemory") || cLower.includes("kb")
+      )) {
+        modeBadge = '<span class="badge badge-purple">嵌入</span>';
+      }
       const estBadge = r.is_estimated ? '<span class="badge badge-orange">估算</span>' : "";
       return `
         <tr>
