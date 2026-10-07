@@ -74,6 +74,7 @@ async def test_tracker_store_crud():
         assert overview["total_completion_tokens"] == 50 + 80 + 100
         assert overview["total_cached_tokens"] == 20
         assert overview["today_tokens"] == 150 + 280 + 400
+        assert overview["today_cached_tokens"] == 20
         assert overview["today_calls"] == 3
 
         # 6. 按模型聚合

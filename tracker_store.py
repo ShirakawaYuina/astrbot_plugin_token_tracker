@@ -176,6 +176,7 @@ class TrackerStore:
                             COALESCE(SUM(total_tokens), 0) as today_tokens,
                             COALESCE(SUM(prompt_tokens), 0) as today_prompt,
                             COALESCE(SUM(completion_tokens), 0) as today_completion,
+                            COALESCE(SUM(cached_tokens), 0) as today_cached,
                             COALESCE(AVG(duration_ms), 0.0) as today_avg_duration
                         FROM token_records
                         WHERE date_str = ?
@@ -248,6 +249,7 @@ class TrackerStore:
                         "today_tokens": int(today_row["today_tokens"]),
                         "today_prompt_tokens": int(today_row["today_prompt"]),
                         "today_completion_tokens": int(today_row["today_completion"]),
+                        "today_cached_tokens": int(today_row["today_cached"]),
                         "today_calls": int(today_row["today_calls"]),
                         "today_avg_duration_ms": round(float(today_row["today_avg_duration"]), 1),
                         "week_tokens": int(week_row["week_tokens"]),
