@@ -134,6 +134,103 @@ body.dashboard-body {
   border-color: var(--primary);
 }
 
+/* Time Filter Card */
+.filter-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.filter-card-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filter-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.time-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background-color: var(--bg-color);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.time-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+  outline: none;
+  white-space: nowrap;
+}
+
+.time-btn:hover {
+  color: var(--text-main);
+  background-color: rgba(148, 163, 184, 0.15);
+}
+
+.time-btn.active {
+  background-color: var(--primary);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+}
+
+.filter-card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.date-input {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  height: 32px;
+}
+
+.date-sep {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.filter-card-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary);
+  background-color: rgba(59, 130, 246, 0.1);
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  white-space: nowrap;
+}
+
+.hidden {
+  display: none !important;
+}
+
 /* KPI Cards */
 .kpi-grid {
   display: grid;

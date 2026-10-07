@@ -22,6 +22,12 @@
                 "type": "bool",
                 "default": true
             },
+            "record_image": {
+                "description": "统计生图及改图模型",
+                "hint": "是否统计 OpenAI 生图与改图插件 (astrbot_plugin_openai_image) 的 Token 消耗。",
+                "type": "bool",
+                "default": true
+            },
             "estimate_when_missing": {
                 "description": "未返回用量时估算兜底",
                 "hint": "当少数第三方中转或定制 API 未回传 usage 字段时，自动基于字符与分词规则估算 Token。",

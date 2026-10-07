@@ -59,6 +59,16 @@ class TrackerStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_records_caller ON token_records(caller_name)"
             )
+            # 兼容历史数据: 确保早期记录中 prompt_tokens 包含 cached_tokens
+            conn.execute(
+                """
+                UPDATE token_records 
+                SET prompt_tokens = total_tokens - completion_tokens 
+                WHERE total_tokens = (prompt_tokens + cached_tokens + completion_tokens) 
+                  AND cached_tokens > 0 
+                  AND total_tokens > (prompt_tokens + completion_tokens)
+                """
+            )
 
     async def record_usage(
         self,
@@ -128,7 +138,10 @@ class TrackerStore:
 
             return await loop.run_in_executor(None, _insert)
 
-    async def get_overview(self) -> dict[str, Any]:
+    async def get_overview(
+        self, *, start_time: float = 0.0, end_time: float = 0.0
+    ) -> dict[str, Any]:
+        """获取 Token 消耗总览看板数据（支持指定时段与历史数据统计）"""
         now = time.time()
         today_date = datetime.datetime.fromtimestamp(now).strftime("%Y-%m-%d")
         seven_days_ago = now - (7 * 86400)
@@ -139,7 +152,7 @@ class TrackerStore:
 
             def _query() -> dict[str, Any]:
                 with self._get_connection() as conn:
-                    # 1. 总用量
+                    # 1. 历史总用量
                     total_row = conn.execute(
                         """
                         SELECT 
@@ -149,7 +162,8 @@ class TrackerStore:
                             COALESCE(SUM(cached_tokens), 0) as total_cached,
                             COALESCE(SUM(total_tokens), 0) as total_tokens,
                             COUNT(DISTINCT model) as distinct_models,
-                            COUNT(DISTINCT caller_name) as distinct_callers
+                            COUNT(DISTINCT caller_name) as distinct_callers,
+                            COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms
                         FROM token_records
                         """
                     ).fetchone()
@@ -161,7 +175,8 @@ class TrackerStore:
                             COUNT(*) as today_calls,
                             COALESCE(SUM(total_tokens), 0) as today_tokens,
                             COALESCE(SUM(prompt_tokens), 0) as today_prompt,
-                            COALESCE(SUM(completion_tokens), 0) as today_completion
+                            COALESCE(SUM(completion_tokens), 0) as today_completion,
+                            COALESCE(AVG(duration_ms), 0.0) as today_avg_duration
                         FROM token_records
                         WHERE date_str = ?
                         """,
@@ -192,6 +207,35 @@ class TrackerStore:
                         (thirty_days_ago,),
                     ).fetchone()
 
+                    # 5. 指定筛选时段用量
+                    has_period = bool(start_time > 0 or end_time > 0)
+                    period_conds: list[str] = []
+                    period_params: list[Any] = []
+                    if start_time > 0:
+                        period_conds.append("timestamp >= ?")
+                        period_params.append(start_time)
+                    if end_time > 0:
+                        period_conds.append("timestamp <= ?")
+                        period_params.append(end_time)
+
+                    period_where = f"WHERE {' AND '.join(period_conds)}" if period_conds else ""
+                    period_row = conn.execute(
+                        f"""
+                        SELECT 
+                            COUNT(*) as period_calls,
+                            COALESCE(SUM(total_tokens), 0) as period_tokens,
+                            COALESCE(SUM(prompt_tokens), 0) as period_prompt,
+                            COALESCE(SUM(completion_tokens), 0) as period_completion,
+                            COALESCE(SUM(cached_tokens), 0) as period_cached,
+                            COUNT(DISTINCT model) as period_distinct_models,
+                            COUNT(DISTINCT caller_name) as period_distinct_callers,
+                            COALESCE(AVG(duration_ms), 0.0) as period_avg_duration
+                        FROM token_records
+                        {period_where}
+                        """,
+                        period_params,
+                    ).fetchone()
+
                     return {
                         "total_tokens": int(total_row["total_tokens"]),
                         "total_prompt_tokens": int(total_row["total_prompt"]),
@@ -200,30 +244,47 @@ class TrackerStore:
                         "total_calls": int(total_row["total_calls"]),
                         "distinct_models": int(total_row["distinct_models"]),
                         "distinct_callers": int(total_row["distinct_callers"]),
+                        "avg_duration_ms": round(float(total_row["avg_duration_ms"]), 1),
                         "today_tokens": int(today_row["today_tokens"]),
                         "today_prompt_tokens": int(today_row["today_prompt"]),
                         "today_completion_tokens": int(today_row["today_completion"]),
                         "today_calls": int(today_row["today_calls"]),
+                        "today_avg_duration_ms": round(float(today_row["today_avg_duration"]), 1),
                         "week_tokens": int(week_row["week_tokens"]),
                         "week_calls": int(week_row["week_calls"]),
                         "month_tokens": int(month_row["month_tokens"]),
                         "month_calls": int(month_row["month_calls"]),
+                        "has_period_filter": has_period,
+                        "period_tokens": int(period_row["period_tokens"]),
+                        "period_prompt_tokens": int(period_row["period_prompt"]),
+                        "period_completion_tokens": int(period_row["period_completion"]),
+                        "period_cached_tokens": int(period_row["period_cached"]),
+                        "period_calls": int(period_row["period_calls"]),
+                        "period_distinct_models": int(period_row["period_distinct_models"]),
+                        "period_distinct_callers": int(period_row["period_distinct_callers"]),
+                        "period_avg_duration_ms": round(float(period_row["period_avg_duration"]), 1),
                     }
 
             return await loop.run_in_executor(None, _query)
 
-    async def get_model_stats(self, *, start_time: float = 0.0) -> list[dict[str, Any]]:
+    async def get_model_stats(
+        self, *, start_time: float = 0.0, end_time: float = 0.0
+    ) -> list[dict[str, Any]]:
         async with self._lock:
             loop = asyncio.get_running_loop()
 
             def _query() -> list[dict[str, Any]]:
                 with self._get_connection() as conn:
                     params: list[Any] = []
-                    where_clause = ""
+                    conditions: list[str] = []
                     if start_time > 0:
-                        where_clause = "WHERE timestamp >= ?"
+                        conditions.append("timestamp >= ?")
                         params.append(start_time)
+                    if end_time > 0:
+                        conditions.append("timestamp <= ?")
+                        params.append(end_time)
 
+                    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
                     query = f"""
                         SELECT 
                             model,
@@ -254,18 +315,24 @@ class TrackerStore:
 
             return await loop.run_in_executor(None, _query)
 
-    async def get_caller_stats(self, *, start_time: float = 0.0) -> list[dict[str, Any]]:
+    async def get_caller_stats(
+        self, *, start_time: float = 0.0, end_time: float = 0.0
+    ) -> list[dict[str, Any]]:
         async with self._lock:
             loop = asyncio.get_running_loop()
 
             def _query() -> list[dict[str, Any]]:
                 with self._get_connection() as conn:
                     params: list[Any] = []
-                    where_clause = ""
+                    conditions: list[str] = []
                     if start_time > 0:
-                        where_clause = "WHERE timestamp >= ?"
+                        conditions.append("timestamp >= ?")
                         params.append(start_time)
+                    if end_time > 0:
+                        conditions.append("timestamp <= ?")
+                        params.append(end_time)
 
+                    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
                     query = f"""
                         SELECT 
                             caller_name,
@@ -273,6 +340,7 @@ class TrackerStore:
                             COUNT(*) as call_count,
                             COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                             COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                            COALESCE(SUM(cached_tokens), 0) as cached_tokens,
                             COALESCE(SUM(total_tokens), 0) as total_tokens
                         FROM token_records
                         {where_clause}
@@ -287,6 +355,7 @@ class TrackerStore:
                             "call_count": int(row["call_count"]),
                             "prompt_tokens": int(row["prompt_tokens"]),
                             "completion_tokens": int(row["completion_tokens"]),
+                            "cached_tokens": int(row["cached_tokens"]),
                             "total_tokens": int(row["total_tokens"]),
                         }
                         for row in rows
@@ -294,9 +363,142 @@ class TrackerStore:
 
             return await loop.run_in_executor(None, _query)
 
-    async def get_trends(self, *, days: int = 14) -> dict[str, Any]:
-        """获取近 N 天每日用量趋势 (补全连续日期)"""
+    async def _get_hourly_trends(self, start_time: float, end_time: float) -> dict[str, Any]:
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+
+            def _query() -> dict[str, Any]:
+                with self._get_connection() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT 
+                            hour_str,
+                            COUNT(*) as call_count,
+                            COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                            COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                            COALESCE(SUM(total_tokens), 0) as total_tokens
+                        FROM token_records
+                        WHERE timestamp >= ? AND timestamp <= ?
+                        GROUP BY hour_str
+                        ORDER BY hour_str ASC
+                        """,
+                        (start_time, end_time),
+                    ).fetchall()
+
+                    data_by_hour = {row["hour_str"]: row for row in rows}
+                    start_dt = datetime.datetime.fromtimestamp(start_time).replace(minute=0, second=0, microsecond=0)
+                    end_dt = datetime.datetime.fromtimestamp(end_time).replace(minute=0, second=0, microsecond=0)
+
+                    labels = []
+                    totals = []
+                    prompts = []
+                    completions = []
+                    calls = []
+
+                    curr = start_dt
+                    step_count = 0
+                    while curr <= end_dt and step_count < 48:
+                        h_str = curr.strftime("%Y-%m-%d %H:00")
+                        display_label = curr.strftime("%H:00")
+                        labels.append(display_label)
+                        if h_str in data_by_hour:
+                            r = data_by_hour[h_str]
+                            totals.append(int(r["total_tokens"]))
+                            prompts.append(int(r["prompt_tokens"]))
+                            completions.append(int(r["completion_tokens"]))
+                            calls.append(int(r["call_count"]))
+                        else:
+                            totals.append(0)
+                            prompts.append(0)
+                            completions.append(0)
+                            calls.append(0)
+                        curr += datetime.timedelta(hours=1)
+                        step_count += 1
+
+                    return {
+                        "labels": labels,
+                        "totals": totals,
+                        "prompts": prompts,
+                        "completions": completions,
+                        "calls": calls,
+                        "mode": "hourly",
+                    }
+
+            return await loop.run_in_executor(None, _query)
+
+    async def _get_range_daily_trends(self, start_time: float, end_time: float) -> dict[str, Any]:
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+
+            def _query() -> dict[str, Any]:
+                with self._get_connection() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT 
+                            date_str,
+                            COUNT(*) as call_count,
+                            COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                            COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                            COALESCE(SUM(total_tokens), 0) as total_tokens
+                        FROM token_records
+                        WHERE timestamp >= ? AND timestamp <= ?
+                        GROUP BY date_str
+                        ORDER BY date_str ASC
+                        """,
+                        (start_time, end_time),
+                    ).fetchall()
+
+                    data_by_date = {row["date_str"]: row for row in rows}
+                    start_d = datetime.datetime.fromtimestamp(start_time).date()
+                    end_d = datetime.datetime.fromtimestamp(end_time).date()
+
+                    labels = []
+                    totals = []
+                    prompts = []
+                    completions = []
+                    calls = []
+
+                    curr = start_d
+                    step_count = 0
+                    while curr <= end_d and step_count < 366:
+                        d_str = curr.strftime("%Y-%m-%d")
+                        labels.append(d_str)
+                        if d_str in data_by_date:
+                            r = data_by_date[d_str]
+                            totals.append(int(r["total_tokens"]))
+                            prompts.append(int(r["prompt_tokens"]))
+                            completions.append(int(r["completion_tokens"]))
+                            calls.append(int(r["call_count"]))
+                        else:
+                            totals.append(0)
+                            prompts.append(0)
+                            completions.append(0)
+                            calls.append(0)
+                        curr += datetime.timedelta(days=1)
+                        step_count += 1
+
+                    return {
+                        "labels": labels,
+                        "totals": totals,
+                        "prompts": prompts,
+                        "completions": completions,
+                        "calls": calls,
+                        "mode": "daily",
+                    }
+
+            return await loop.run_in_executor(None, _query)
+
+    async def get_trends(
+        self, *, days: int = 14, start_time: float = 0.0, end_time: float = 0.0
+    ) -> dict[str, Any]:
+        """获取用量趋势 (支持自定义天数或指定起止时间范围)"""
         now = time.time()
+        if start_time > 0 and end_time > 0 and end_time >= start_time:
+            span = end_time - start_time
+            if span <= 36 * 3600:
+                return await self._get_hourly_trends(start_time, end_time)
+            return await self._get_range_daily_trends(start_time, end_time)
+
         start_dt = datetime.datetime.fromtimestamp(now) - datetime.timedelta(days=max(1, days) - 1)
         cutoff = start_dt.timestamp()
         async with self._lock:
@@ -349,6 +551,7 @@ class TrackerStore:
                         "prompts": prompts,
                         "completions": completions,
                         "calls": calls,
+                        "mode": "daily",
                     }
 
             return await loop.run_in_executor(None, _query)
@@ -366,7 +569,6 @@ class TrackerStore:
             })
         return result
 
-
     async def get_records(
         self,
         *,
@@ -377,6 +579,10 @@ class TrackerStore:
         caller: str = "",
         caller_filter: str = "",
         keyword: str = "",
+        start_time: float = 0.0,
+        end_time: float = 0.0,
+        start_date: str = "",
+        end_date: str = "",
     ) -> dict[str, Any]:
         safe_page = max(1, page)
         safe_page_size = max(1, min(200, page_size))
@@ -385,6 +591,8 @@ class TrackerStore:
         target_model = (model or model_filter or "").strip()
         target_caller = (caller or caller_filter or "").strip()
         target_keyword = keyword.strip()
+        target_start_date = start_date.strip()
+        target_end_date = end_date.strip()
 
         async with self._lock:
             loop = asyncio.get_running_loop()
@@ -402,6 +610,18 @@ class TrackerStore:
                     if target_keyword:
                         conditions.append("(model LIKE ? OR caller_name LIKE ? OR session_id LIKE ?)")
                         params.extend([f"%{target_keyword}%", f"%{target_keyword}%", f"%{target_keyword}%"])
+                    if start_time > 0:
+                        conditions.append("timestamp >= ?")
+                        params.append(start_time)
+                    if end_time > 0:
+                        conditions.append("timestamp <= ?")
+                        params.append(end_time)
+                    if target_start_date:
+                        conditions.append("date_str >= ?")
+                        params.append(target_start_date)
+                    if target_end_date:
+                        conditions.append("date_str <= ?")
+                        params.append(target_end_date)
 
                     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -410,7 +630,6 @@ class TrackerStore:
                         params,
                     )
                     total_count = int(count_cur.fetchone()["total"])
-
 
                     query_sql = f"""
                         SELECT 

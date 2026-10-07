@@ -124,13 +124,13 @@ class Main(star.Star):
             "📊 Token 用量概况 (Token Tracker)",
             "━━━━━━━━━━━━━━━━━━━━",
             f"📅 今日消耗：",
-            f"  • 总计: {today_tokens:,} tokens (~{sym}{cost_today:.4f})",
+            f"  • 总计: {today_tokens:,} tokens",
             f"  • 输入: {today_prompt:,} (缓存: {today_cached:,})",
             f"  • 输出: {today_completion:,}",
             f"  • 调用: {today_calls:,} 次",
             "",
             f"📈 历史累计：",
-            f"  • 总计: {total_tokens:,} tokens (~{sym}{cost_total:.4f})",
+            f"  • 总计: {total_tokens:,} tokens",
             f"  • 调用: {total_calls:,} 次",
             "━━━━━━━━━━━━━━━━━━━━",
         ]
@@ -166,9 +166,6 @@ class Main(star.Star):
         today_cached = summary.get("today_cached_tokens", 0)
         today_comp = summary.get("today_completion_tokens", 0)
 
-        sym = cfg.pricing.currency_symbol
-        cost = self._calculate_cost(today_tokens, cfg)
-
         lines = [
             "📅 今日 Token 详细消耗",
             "━━━━━━━━━━━━━━━━━━━━",
@@ -177,7 +174,6 @@ class Main(star.Star):
             f"• 缓存 Token: {today_cached:,}",
             f"• 输出 Token: {today_comp:,}",
             f"• 调用总次数: {today_calls:,} 次",
-            f"• 预估总费用: {sym}{cost:.4f}",
             "━━━━━━━━━━━━━━━━━━━━",
         ]
         return "\n".join(lines)

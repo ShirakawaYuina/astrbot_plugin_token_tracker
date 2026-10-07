@@ -43,6 +43,7 @@ class TrackerSettingsConfig:
     enable: bool = True
     record_streaming: bool = True
     record_embedding: bool = True
+    record_image: bool = True
     estimate_when_missing: bool = True
     currency_symbol: str = "¥"
 
@@ -98,6 +99,7 @@ def parse_plugin_config(raw: dict[str, Any] | None) -> PluginConfig:
         enable=_to_bool(tracker_raw.get("enable"), True),
         record_streaming=_to_bool(tracker_raw.get("record_streaming"), True),
         record_embedding=_to_bool(tracker_raw.get("record_embedding"), True),
+        record_image=_to_bool(tracker_raw.get("record_image"), True),
         estimate_when_missing=_to_bool(tracker_raw.get("estimate_when_missing"), True),
         currency_symbol=currency_sym,
     )

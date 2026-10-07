@@ -27,6 +27,26 @@ def _safe_query(key: str, default: str = "") -> str:
         return default
 
 
+def _parse_time_filter() -> tuple[float, float, str, str]:
+    start_time = 0.0
+    end_time = 0.0
+    raw_start = _safe_query("start_time")
+    if raw_start:
+        try:
+            start_time = float(raw_start)
+        except ValueError:
+            pass
+    raw_end = _safe_query("end_time")
+    if raw_end:
+        try:
+            end_time = float(raw_end)
+        except ValueError:
+            pass
+    start_date = _safe_query("start_date")
+    end_date = _safe_query("end_date")
+    return start_time, end_time, start_date, end_date
+
+
 class TokenTrackerWebApi:
     def __init__(self, context: Context, store: TrackerStore, get_cfg: Any) -> None:
         self.context = context
@@ -81,12 +101,14 @@ class TokenTrackerWebApi:
 
     async def get_overview(self) -> Any:
         try:
-            summary = await self.store.get_overview()
+            start_time, end_time, _, _ = _parse_time_filter()
+            summary = await self.store.get_overview(start_time=start_time, end_time=end_time)
             cfg: PluginConfig = self.get_cfg()
             ref_rate = cfg.pricing.reference_rates.get("default", 0.002)
             summary["currency_symbol"] = cfg.pricing.currency_symbol
             summary["estimated_cost_total"] = (summary.get("total_tokens", 0) / 1000.0) * ref_rate
             summary["estimated_cost_today"] = (summary.get("today_tokens", 0) / 1000.0) * ref_rate
+            summary["estimated_cost_period"] = (summary.get("period_tokens", 0) / 1000.0) * ref_rate
             return json_response(summary)
         except Exception as e:
             logger.error("token-tracker | get_overview error: %s", e, exc_info=True)
@@ -94,14 +116,8 @@ class TokenTrackerWebApi:
 
     async def get_models(self) -> Any:
         try:
-            start_time = 0.0
-            raw_start = _safe_query("start_time")
-            if raw_start:
-                try:
-                    start_time = float(raw_start)
-                except ValueError:
-                    pass
-            models = await self.store.get_model_stats(start_time=start_time)
+            start_time, end_time, _, _ = _parse_time_filter()
+            models = await self.store.get_model_stats(start_time=start_time, end_time=end_time)
             return json_response({"models": models})
         except Exception as e:
             logger.error("token-tracker | get_models error: %s", e, exc_info=True)
@@ -109,14 +125,8 @@ class TokenTrackerWebApi:
 
     async def get_callers(self) -> Any:
         try:
-            start_time = 0.0
-            raw_start = _safe_query("start_time")
-            if raw_start:
-                try:
-                    start_time = float(raw_start)
-                except ValueError:
-                    pass
-            callers = await self.store.get_caller_stats(start_time=start_time)
+            start_time, end_time, _, _ = _parse_time_filter()
+            callers = await self.store.get_caller_stats(start_time=start_time, end_time=end_time)
             return json_response({"callers": callers})
         except Exception as e:
             logger.error("token-tracker | get_callers error: %s", e, exc_info=True)
@@ -124,6 +134,7 @@ class TokenTrackerWebApi:
 
     async def get_trend(self) -> Any:
         try:
+            start_time, end_time, _, _ = _parse_time_filter()
             days = 14
             raw_days = _safe_query("days")
             if raw_days:
@@ -131,7 +142,7 @@ class TokenTrackerWebApi:
                     days = int(raw_days)
                 except ValueError:
                     pass
-            trends = await self.store.get_trends(days=days)
+            trends = await self.store.get_trends(days=days, start_time=start_time, end_time=end_time)
             return json_response(trends)
         except Exception as e:
             logger.error("token-tracker | get_trend error: %s", e, exc_info=True)
@@ -157,7 +168,7 @@ class TokenTrackerWebApi:
             keyword = _safe_query("keyword")
             model = _safe_query("model")
             caller = _safe_query("caller")
-
+            start_time, end_time, start_date, end_date = _parse_time_filter()
 
             records = await self.store.get_records(
                 page=page,
@@ -165,6 +176,10 @@ class TokenTrackerWebApi:
                 keyword=keyword,
                 model_filter=model,
                 caller_filter=caller,
+                start_time=start_time,
+                end_time=end_time,
+                start_date=start_date,
+                end_date=end_date,
             )
             return json_response(records)
         except Exception as e:
@@ -181,7 +196,22 @@ class TokenTrackerWebApi:
 
     async def export_csv(self) -> Any:
         try:
-            res = await self.store.get_records(page=1, page_size=20000)
+            keyword = _safe_query("keyword")
+            model = _safe_query("model")
+            caller = _safe_query("caller")
+            start_time, end_time, start_date, end_date = _parse_time_filter()
+
+            res = await self.store.get_records(
+                page=1,
+                page_size=50000,
+                keyword=keyword,
+                model_filter=model,
+                caller_filter=caller,
+                start_time=start_time,
+                end_time=end_time,
+                start_date=start_date,
+                end_date=end_date,
+            )
             items = res.get("items", [])
 
             buf = io.StringIO()

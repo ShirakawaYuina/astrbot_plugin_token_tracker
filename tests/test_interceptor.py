@@ -9,7 +9,9 @@ from astrbot.api.provider import Provider
 from astrbot.core.provider.entities import LLMResponse, TokenUsage
 from astrbot_plugin_token_tracker.interceptor import (
     _estimate_tokens,
+    _extract_usage_from_dict,
     _extract_usage_from_response,
+    _resolve_image_gateway_provider_id,
     install_interceptor,
     uninstall_interceptor,
 )
@@ -163,7 +165,7 @@ async def test_subclass_interception():
         call_kwargs = mock_store.record_usage.call_args.kwargs
         assert call_kwargs["model"] == "test-model-v1"
         assert call_kwargs["provider_id"] == "test-prov-id"
-        assert call_kwargs["prompt_tokens"] == 25
+        assert call_kwargs["prompt_tokens"] == 30
         assert call_kwargs["cached_tokens"] == 5
         assert call_kwargs["completion_tokens"] == 15
         assert call_kwargs["total_tokens"] == 45
@@ -229,4 +231,236 @@ async def test_embedding_interception():
         assert call_kwargs2["completion_tokens"] == 0
     finally:
         uninstall_interceptor()
+
+
+def test_extract_usage_from_dict():
+    # 1. OpenAI Responses API 风格
+    resp_responses = {
+        "output": [{"type": "image_generation_call", "result": "xyz"}],
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 1000,
+            "total_tokens": 1050,
+            "input_tokens_details": {"cached_tokens": 12},
+        },
+    }
+    p, c, k, tot = _extract_usage_from_dict(resp_responses)
+    assert p == 50
+    assert c == 1000
+    assert k == 12
+    assert tot == 1050
+
+    # 2. OpenAI standard image generation 风格
+    resp_images = {
+        "data": [{"b64_json": "abc"}],
+        "usage": {
+            "prompt_tokens": 25,
+            "completion_tokens": 750,
+            "total_tokens": 775,
+            "prompt_tokens_details": {"cached_tokens": 5},
+        },
+    }
+    p2, c2, k2, tot2 = _extract_usage_from_dict(resp_images)
+    assert p2 == 25
+    assert c2 == 750
+    assert k2 == 5
+    assert tot2 == 775
+
+    # 3. 顶层扁平字典
+    resp_flat = {
+        "data": [{"url": "http://img.jpg"}],
+        "input_tokens": 15,
+        "output_tokens": 500,
+    }
+    p3, c3, k3, tot3 = _extract_usage_from_dict(resp_flat)
+    assert p3 == 15
+    assert c3 == 500
+    assert k3 == 0
+    assert tot3 == 515
+
+    # 4. 无 usage 数据
+    resp_none = {"data": [{"b64_json": "abc"}]}
+    p4, c4, k4, tot4 = _extract_usage_from_dict(resp_none)
+    assert p4 == 0 and c4 == 0 and k4 == 0 and tot4 == 0
+
+
+def test_resolve_image_gateway_provider_id():
+    class DummyGwWithId:
+        provider_id = "my-custom-provider"
+
+    assert _resolve_image_gateway_provider_id(DummyGwWithId()) == "my-custom-provider"
+
+    class DummyGwWithEndpoint:
+        _images_generations_endpoint = "https://cdn.jucode.top/v1/images/generations"
+
+    assert _resolve_image_gateway_provider_id(DummyGwWithEndpoint()) == "jucode"
+
+    class DummyGwWithOpenAI:
+        _images_generations_endpoint = "https://api.openai.com/v1/images/generations"
+
+    assert _resolve_image_gateway_provider_id(DummyGwWithOpenAI()) == "openai"
+
+    class DummyGwFallback:
+        pass
+
+    assert _resolve_image_gateway_provider_id(DummyGwFallback()) == "openai_image"
+
+
+@pytest.mark.asyncio
+async def test_openai_image_gateway_interception():
+    import sys
+    import types
+
+    class MockOpenAIImageGateway:
+        def __init__(self):
+            self._images_generations_endpoint = "https://cdn.jucode.top/v1/images/generations"
+            self._images_edits_endpoint = "https://cdn.jucode.top/v1/images/edits"
+            self._endpoint_candidates = ["https://cdn.jucode.top/v1/responses"]
+
+        async def request_response(self, payload):
+            if payload.get("trigger_no_usage"):
+                return {"output": [{"type": "image_generation_call", "result": "abc"}]}
+            return {
+                "model": "gpt-image-2",
+                "output": [{"type": "image_generation_call", "result": "abc"}],
+                "usage": {
+                    "input_tokens": 40,
+                    "output_tokens": 1000,
+                    "total_tokens": 1040,
+                    "input_tokens_details": {"cached_tokens": 8},
+                },
+            }
+
+        async def request_image_generation(self, payload):
+            return {
+                "data": [{"b64_json": "def"}],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 800,
+                    "total_tokens": 820,
+                },
+            }
+
+        async def request_image_edit(self, data, files):
+            return {
+                "data": [{"b64_json": "ghi"}],
+                "usage": {
+                    "prompt_tokens": 30,
+                    "completion_tokens": 900,
+                    "total_tokens": 930,
+                },
+            }
+
+    fake_mod_name = "data.plugins.astrbot_plugin_openai_image.core.gateways.openai_image_gateway"
+    fake_mod = types.ModuleType(fake_mod_name)
+    fake_mod.OpenAIImageGateway = MockOpenAIImageGateway
+    sys.modules[fake_mod_name] = fake_mod
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+    cfg = PluginConfig()
+
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        inst = MockOpenAIImageGateway()
+
+        # 1. 测试 request_response
+        resp1 = await inst.request_response({"model": "gpt-image-2", "prompt": "a cyberpunk city"})
+        assert resp1 is not None
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.called
+        call1 = mock_store.record_usage.call_args.kwargs
+        assert call1["model"] == "gpt-image-2"
+        assert call1["provider_id"] == "jucode"
+        assert call1["caller_type"] == "plugin"
+        assert call1["caller_name"] == "astrbot_plugin_openai_image"
+        assert call1["prompt_tokens"] == 40
+        assert call1["completion_tokens"] == 1000
+        assert call1["cached_tokens"] == 8
+        assert call1["total_tokens"] == 1040
+
+        # 2. 测试 request_image_generation
+        mock_store.record_usage.reset_mock()
+        resp2 = await inst.request_image_generation({"model": "dall-e-3", "prompt": "a cute kitten"})
+        assert resp2 is not None
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.called
+        call2 = mock_store.record_usage.call_args.kwargs
+        assert call2["model"] == "dall-e-3"
+        assert call2["provider_id"] == "jucode"
+        assert call2["caller_type"] == "plugin"
+        assert call2["caller_name"] == "astrbot_plugin_openai_image"
+        assert call2["prompt_tokens"] == 20
+        assert call2["completion_tokens"] == 800
+        assert call2["total_tokens"] == 820
+
+        # 3. 测试 request_image_edit
+        mock_store.record_usage.reset_mock()
+        resp3 = await inst.request_image_edit(
+            {"model": "gpt-image-edit", "prompt": "change background"},
+            [("sample.png", b"123", "image/png")],
+        )
+        assert resp3 is not None
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.called
+        call3 = mock_store.record_usage.call_args.kwargs
+        assert call3["model"] == "gpt-image-edit"
+        assert call3["provider_id"] == "jucode"
+        assert call3["caller_type"] == "plugin"
+        assert call3["caller_name"] == "astrbot_plugin_openai_image"
+        assert call3["prompt_tokens"] == 30
+        assert call3["completion_tokens"] == 900
+        assert call3["total_tokens"] == 930
+
+        # 4. 无 token 用量返回时跳过记录
+        mock_store.record_usage.reset_mock()
+        resp4 = await inst.request_response({"trigger_no_usage": True})
+        assert resp4 is not None
+        await asyncio.sleep(0.05)
+        assert not mock_store.record_usage.called
+
+    finally:
+        uninstall_interceptor()
+        sys.modules.pop(fake_mod_name, None)
+
+
+@pytest.mark.asyncio
+async def test_openai_image_gateway_disabled_config():
+    import sys
+    import types
+    from astrbot_plugin_token_tracker.plugin_config import TrackerSettingsConfig
+
+    class MockOpenAIImageGatewayDisabled:
+        async def request_image_generation(self, payload):
+            return {
+                "data": [{"b64_json": "def"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60},
+            }
+
+    fake_mod_name = "data.plugins.astrbot_plugin_openai_image.core.gateways.openai_image_gateway"
+    fake_mod = types.ModuleType(fake_mod_name)
+    fake_mod.OpenAIImageGateway = MockOpenAIImageGatewayDisabled
+    sys.modules[fake_mod_name] = fake_mod
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+    cfg = PluginConfig(tracker=TrackerSettingsConfig(record_image=False))
+
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+        inst = MockOpenAIImageGatewayDisabled()
+        resp = await inst.request_image_generation({"model": "dall-e-3"})
+        assert resp is not None
+        await asyncio.sleep(0.05)
+        # record_image=False 时不应记录
+        assert not mock_store.record_usage.called
+    finally:
+        uninstall_interceptor()
+        sys.modules.pop(fake_mod_name, None)
 

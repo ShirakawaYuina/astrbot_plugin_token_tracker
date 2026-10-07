@@ -110,3 +110,75 @@ async def test_tracker_store_crud():
         overview_after = await store.get_overview_summary()
         assert overview_after["total_tokens"] == 0
         assert overview_after["total_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_tracker_store_time_filtering():
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test_time_filter.db"
+        store = TrackerStore(db_path)
+
+        now = time.time()
+        # 记录 1: 昨天 (-86400)
+        t_yesterday = now - 86400
+        # 记录 2: 刚才 (-60)
+        t_recent = now - 60
+
+        with store._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO token_records (
+                    timestamp, datetime_str, date_str, hour_str,
+                    model, provider_id, caller_type, caller_name, session_id,
+                    is_streaming, is_estimated, prompt_tokens, completion_tokens,
+                    cached_tokens, total_tokens, duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t_yesterday, "2026-10-06 10:00:00", "2026-10-06", "2026-10-06 10:00",
+                    "model-yesterday", "prov1", "plugin", "plugin_a", "",
+                    0, 0, 100, 50, 0, 150, 500.0
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO token_records (
+                    timestamp, datetime_str, date_str, hour_str,
+                    model, provider_id, caller_type, caller_name, session_id,
+                    is_streaming, is_estimated, prompt_tokens, completion_tokens,
+                    cached_tokens, total_tokens, duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t_recent, "2026-10-07 10:00:00", "2026-10-07", "2026-10-07 10:00",
+                    "model-today", "prov2", "plugin", "plugin_b", "",
+                    0, 0, 200, 100, 0, 300, 800.0
+                ),
+            )
+
+        # 1. 过滤今天: 应该只包含 model-today (300 tokens)
+        today_overview = await store.get_overview(start_time=now - 3600, end_time=now + 3600)
+        assert today_overview["has_period_filter"] is True
+        assert today_overview["period_tokens"] == 300
+        assert today_overview["period_calls"] == 1
+
+        # 2. 模型统计时段过滤
+        models_filtered = await store.get_model_stats(start_time=now - 3600, end_time=now + 3600)
+        assert len(models_filtered) == 1
+        assert models_filtered[0]["model"] == "model-today"
+
+        # 3. 来源统计时段过滤
+        callers_filtered = await store.get_caller_stats(start_time=t_yesterday - 100, end_time=t_yesterday + 100)
+        assert len(callers_filtered) == 1
+        assert callers_filtered[0]["caller_name"] == "plugin_a"
+
+        # 4. 趋势时段过滤 (小时级与天级)
+        trend_hourly = await store.get_trends(start_time=now - 3600, end_time=now)
+        assert trend_hourly["mode"] == "hourly"
+        assert len(trend_hourly["labels"]) >= 1
+
+        # 5. 明细时段过滤
+        rec_yesterday = await store.get_records(start_time=t_yesterday - 10, end_time=t_yesterday + 10)
+        assert rec_yesterday["total"] == 1
+        assert rec_yesterday["items"][0]["model"] == "model-yesterday"
