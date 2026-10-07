@@ -1,7 +1,7 @@
 name: astrbot_plugin_token_tracker
 display_name: Token 用量统计
 desc: 全局监控并统计 AstrBot 的核心对话与所有第三方插件调用的 Token 消耗，支持按模型、按插件分类统计、流式/非流式用量捕获、成本预估，并提供 AstrBot 内置 WebUI 可视化看板。
-author: soulter
+author: AsryMiu
 version: 1.0.0
-repo: https://github.com/soulter/AstrBot
+repo: https://github.com/ShirakawaYuina/astrbot_plugin_token_tracker
 support_platforms: []
