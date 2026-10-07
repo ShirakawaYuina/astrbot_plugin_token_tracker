@@ -464,3 +464,77 @@ async def test_openai_image_gateway_disabled_config():
         uninstall_interceptor()
         sys.modules.pop(fake_mod_name, None)
 
+
+@pytest.mark.asyncio
+async def test_caller_identification_context_llm_generate():
+    """测试通过 Context.llm_generate 发起的调用能够正确识别插件来源"""
+    class MockProvider(Provider):
+        def __init__(self):
+            self.model_name = "deepseek-v4-flash-ga-260731"
+            self.provider_config = {"id": "ark_provider"}
+
+        def get_current_key(self):
+            return "k"
+
+        def get_models(self):
+            return ["deepseek-v4-flash-ga-260731"]
+
+        def set_key(self, key):
+            pass
+
+        async def text_chat(self, *args, **kwargs):
+            resp = LLMResponse("assistant")
+            resp.usage = TokenUsage(input_other=100, input_cached=0, output=50)
+            return resp
+
+    mock_provider = MockProvider()
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+
+    cfg = PluginConfig()
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        # 模拟第三方插件设置了异步上下文变量（例如 TraceContext）
+        import contextvars
+        var = contextvars.ContextVar("trace_ctx_test", default=None)
+
+        class MockTraceContext:
+            pass
+
+        MockTraceContext.__module__ = "astrbot_plugin_qq_group_daily_analysis.src.shared.trace_context"
+        var.set(MockTraceContext())
+
+        resp = await mock_provider.text_chat(prompt="分析群聊")
+        assert resp is not None
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.called
+        call_kwargs = mock_store.record_usage.call_args.kwargs
+        assert call_kwargs["caller_type"] == "plugin"
+        assert call_kwargs["caller_name"] == "astrbot_plugin_qq_group_daily_analysis"
+        assert call_kwargs["model"] == "deepseek-v4-flash-ga-260731"
+    finally:
+        uninstall_interceptor()
+
+
+@pytest.mark.asyncio
+async def test_caller_identification_contextvars_trace():
+    """测试当栈隔离时，通过 contextvars 捕获发起插件（如 TraceContext）"""
+    from astrbot_plugin_token_tracker.interceptor import _identify_caller
+    import contextvars
+
+    var = contextvars.ContextVar("mock_plugin_var", default=None)
+
+    class PluginState:
+        pass
+
+    PluginState.__module__ = "astrbot_plugin_qq_group_daily_analysis.src.domain.services"
+    var.set(PluginState())
+
+    caller_type, caller_name = _identify_caller()
+    assert caller_type == "plugin"
+    assert caller_name == "astrbot_plugin_qq_group_daily_analysis"
+
+

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import importlib
 import inspect
 import pkgutil
@@ -19,6 +20,11 @@ try:
 except Exception:
     EmbeddingProvider = None
 
+try:
+    from astrbot.core.star.context import Context
+except Exception:
+    Context = None
+
 from .plugin_config import PluginConfig
 from .tracker_store import TrackerStore
 
@@ -28,41 +34,99 @@ _PATCHED_METHODS: dict[tuple[type, str], Any] = {}
 _IS_TRACKING: contextvars.ContextVar[bool] = contextvars.ContextVar("token_tracker_in_progress", default=False)
 # 用于捕获底层 Embedding SDK（如 OpenAI/DashScope）回传的真实 usage 字段 (prompt_tokens, model)
 _CAPTURED_EMBEDDING_USAGE: contextvars.ContextVar[tuple[int, str] | None] = contextvars.ContextVar("captured_embedding_usage", default=None)
+# 用于在 Context API (如 context.llm_generate) 包装层向下文传播发起插件身份
+_CURRENT_CALLER: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("token_tracker_current_caller", default=None)
 
 
-def _identify_caller() -> tuple[str, str]:
-    """通过调用栈自动识别调用方是主对话、知识库还是具体某个第三方插件（如 livingmemory）"""
+def _identify_caller(offset: int = 2) -> tuple[str, str]:
+    """通过显式上下文、异步上下文变量及调用栈自动识别调用方来源。
+
+    优先判定第三方插件，防止将插件调用的 Context API 误判为主对话 core_chat。
+
+    Args:
+        offset: 调用栈跳过层数，默认跳过当前函数及直接包装层。
+
+    Returns:
+        (caller_type, caller_name) 元组，例如 ("plugin", "astrbot_plugin_qq_group_daily_analysis")
+        或 ("conversation", "core_chat")。
+    """
+    # 1. 优先读取 Context API 拦截器显式注入的发起插件
+    explicit = _CURRENT_CALLER.get()
+    if explicit:
+        return explicit
+
+    # 2. 检查异步上下文变量 (contextvars) 中是否存在来自第三方插件的上下文对象 (如 TraceContext)
     try:
-        stack = inspect.stack()
-        for frame_info in stack[2:20]:
-            fn = frame_info.filename.replace("\\", "/")
-            if "data/plugins/" in fn or "astrbot_plugin_" in fn:
-                # 尝试从 data/plugins/<plugin_dir>/ 路径中提取插件名
-                if "data/plugins/" in fn:
-                    idx = fn.find("data/plugins/") + len("data/plugins/")
-                    folder = fn[idx:].split("/")[0]
-                    if folder and folder != "astrbot_plugin_token_tracker":
-                        return "plugin", folder
-                # 或者通过文件名特征
-                parts = fn.split("/")
+        for var, val in contextvars.copy_context().items():
+            if val is None:
+                continue
+            val_mod = getattr(type(val), "__module__", "")
+            if "astrbot_plugin_" in val_mod or "data.plugins" in val_mod:
+                parts = val_mod.split(".")
                 for p in parts:
                     if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
                         return "plugin", p
-            if any(
+                if "data.plugins" in val_mod:
+                    idx = val_mod.find("data.plugins.") + len("data.plugins.")
+                    folder = val_mod[idx:].split(".")[0]
+                    if folder and folder != "astrbot_plugin_token_tracker":
+                        return "plugin", folder
+            var_name = getattr(var, "name", "")
+            if "astrbot_plugin_" in var_name and var_name != "astrbot_plugin_token_tracker":
+                for p in var_name.split("."):
+                    if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
+                        return "plugin", p
+    except Exception:
+        pass
+
+    # 3. 遍历调用栈：全栈优先匹配第三方插件，排除核心误伤
+    try:
+        stack = inspect.stack()
+        detected_plugin: str | None = None
+        has_kb = False
+        has_core = False
+
+        for frame_info in stack[offset:35]:
+            fn = frame_info.filename.replace("\\", "/")
+
+            # 尝试从 data/plugins/<plugin_dir>/ 路径中提取插件名
+            if "data/plugins/" in fn:
+                idx = fn.find("data/plugins/") + len("data/plugins/")
+                folder = fn[idx:].split("/")[0]
+                if folder and folder != "astrbot_plugin_token_tracker":
+                    detected_plugin = folder
+                    break
+
+            # 尝试通过文件名/路径特征匹配 astrbot_plugin_*
+            parts = fn.split("/")
+            for p in parts:
+                if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
+                    detected_plugin = p
+                    break
+            if detected_plugin:
+                break
+
+            if "knowledge_base" in fn:
+                has_kb = True
+            elif any(
                 marker in fn
                 for marker in [
                     "astrbot/core/agent",
                     "astrbot/core/conversation",
                     "astrbot/core/pipeline",
-                    "astrbot/core/star",
-                    "knowledge_base",
                 ]
             ):
-                if "knowledge_base" in fn:
-                    return "knowledge_base", "kb_rag"
-                return "conversation", "core_chat"
+                has_core = True
+
+        if detected_plugin:
+            return "plugin", detected_plugin
+        if has_kb:
+            return "knowledge_base", "kb_rag"
+        if has_core:
+            return "conversation", "core_chat"
     except Exception:
         pass
+
     return "conversation", "core_chat"
 
 
@@ -931,6 +995,47 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
                 return patched_request_image_edit
 
             gw_cls.request_image_edit = _make_image_edit_wrapper(orig_rie)
+
+    # 8. 对 AstrBot Context.llm_generate 及 Context.tool_loop_agent 安装 AOP 拦截器
+    # 确保通过 context.llm_generate 发起（无论直接 await 还是通过 asyncio.create_task 包装）的 LLM 调用都能精准关联到发起插件
+    if Context is not None:
+        if "llm_generate" in Context.__dict__:
+            orig_llm_gen = Context.__dict__["llm_generate"]
+            _PATCHED_METHODS[(Context, "llm_generate")] = orig_llm_gen
+
+            @functools.wraps(orig_llm_gen)
+            def patched_llm_generate(self: Any, *args: Any, **kwargs: Any) -> Any:
+                caller = _identify_caller(offset=2)
+
+                async def _coro_runner():
+                    tok = _CURRENT_CALLER.set(caller)
+                    try:
+                        return await orig_llm_gen(self, *args, **kwargs)
+                    finally:
+                        _CURRENT_CALLER.reset(tok)
+
+                return _coro_runner()
+
+            Context.llm_generate = patched_llm_generate
+
+        if "tool_loop_agent" in Context.__dict__:
+            orig_tla = Context.__dict__["tool_loop_agent"]
+            _PATCHED_METHODS[(Context, "tool_loop_agent")] = orig_tla
+
+            @functools.wraps(orig_tla)
+            def patched_tool_loop_agent(self: Any, *args: Any, **kwargs: Any) -> Any:
+                caller = _identify_caller(offset=2)
+
+                async def _coro_runner():
+                    tok = _CURRENT_CALLER.set(caller)
+                    try:
+                        return await orig_tla(self, *args, **kwargs)
+                    finally:
+                        _CURRENT_CALLER.reset(tok)
+
+                return _coro_runner()
+
+            Context.tool_loop_agent = patched_tool_loop_agent
 
     logger.info(
         f"token-tracker | Global Provider AOP interceptor installed on {len(_PATCHED_METHODS)} methods across: "
