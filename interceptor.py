@@ -55,13 +55,15 @@ def _identify_caller(offset: int = 2) -> tuple[str, str]:
     if explicit:
         return explicit
 
-    # 2. 检查异步上下文变量 (contextvars) 中是否存在来自第三方插件的上下文对象 (如 TraceContext)
+    # 2. 检查异步上下文变量 (contextvars) 中是否存在来自第三方插件的上下文对象 (如 TraceContext / livingmemory_query_embeddings)
     try:
         for var, val in contextvars.copy_context().items():
             if val is None:
                 continue
             val_mod = getattr(type(val), "__module__", "")
-            if "astrbot_plugin_" in val_mod or "data.plugins" in val_mod:
+            if "astrbot_plugin_" in val_mod or "data.plugins" in val_mod or "livingmemory" in val_mod:
+                if "livingmemory" in val_mod:
+                    return "plugin", "astrbot_plugin_livingmemory"
                 parts = val_mod.split(".")
                 for p in parts:
                     if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
@@ -71,11 +73,15 @@ def _identify_caller(offset: int = 2) -> tuple[str, str]:
                     folder = val_mod[idx:].split(".")[0]
                     if folder and folder != "astrbot_plugin_token_tracker":
                         return "plugin", folder
+
             var_name = getattr(var, "name", "")
-            if "astrbot_plugin_" in var_name and var_name != "astrbot_plugin_token_tracker":
-                for p in var_name.split("."):
-                    if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
-                        return "plugin", p
+            if var_name:
+                if "astrbot_plugin_" in var_name and var_name != "astrbot_plugin_token_tracker":
+                    for p in var_name.split("."):
+                        if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
+                            return "plugin", p
+                if "livingmemory" in var_name:
+                    return "plugin", "astrbot_plugin_livingmemory"
     except Exception:
         pass
 
@@ -97,11 +103,14 @@ def _identify_caller(offset: int = 2) -> tuple[str, str]:
                     detected_plugin = folder
                     break
 
-            # 尝试通过文件名/路径特征匹配 astrbot_plugin_*
+            # 尝试通过文件名/路径特征匹配 astrbot_plugin_* 或 livingmemory
             parts = fn.split("/")
             for p in parts:
                 if p.startswith("astrbot_plugin_") and p != "astrbot_plugin_token_tracker":
                     detected_plugin = p
+                    break
+                if p == "livingmemory":
+                    detected_plugin = "astrbot_plugin_livingmemory"
                     break
             if detected_plugin:
                 break
@@ -507,51 +516,61 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
             _PATCHED_METHODS[(cls, "text_chat")] = orig_chat
 
             def _make_chat_wrapper(original_fn: Any):
-                async def patched_text_chat(self: Provider, *args: Any, **kwargs: Any) -> LLMResponse:
-                    cfg: PluginConfig = get_cfg()
-                    if not cfg.tracker.enable or _IS_TRACKING.get():
-                        return await original_fn(self, *args, **kwargs)
+                @functools.wraps(original_fn)
+                def patched_text_chat(self: Provider, *args: Any, **kwargs: Any) -> Any:
+                    caller = _CURRENT_CALLER.get() or _identify_caller(offset=2)
 
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    session_id = kwargs.get("session_id") or ""
-                    prompt = kwargs.get("prompt") or (args[0] if args else "")
-                    contexts = kwargs.get("contexts")
-                    caller_type, caller_name = _identify_caller()
+                    async def _coro_runner():
+                        cfg: PluginConfig = get_cfg()
+                        if not cfg.tracker.enable or _IS_TRACKING.get():
+                            return await original_fn(self, *args, **kwargs)
 
-                    try:
-                        resp: LLMResponse = await original_fn(self, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
+                        token = _IS_TRACKING.set(True)
+                        tok_caller = _CURRENT_CALLER.set(caller)
+                        start_time = time.time()
+                        session_id = kwargs.get("session_id") or ""
+                        prompt = kwargs.get("prompt") or (args[0] if args else "")
+                        contexts = kwargs.get("contexts")
+                        caller_type, caller_name = caller
 
-                        model_name, provider_id = _resolve_model_and_provider(self, kwargs, resp)
-                        prompt_tok, comp_tok, cache_tok, tot_tok, is_est = _extract_usage_from_response(
-                            resp,
-                            prompt=str(prompt or ""),
-                            contexts=contexts,
-                            estimate_fallback=cfg.tracker.estimate_when_missing,
-                        )
+                        try:
+                            resp: LLMResponse = await original_fn(self, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
 
-                        # 异步入库
-                        asyncio.create_task(
-                            store.record_usage(
-                                model=model_name,
-                                provider_id=provider_id,
-                                caller_type=caller_type,
-                                caller_name=caller_name,
-                                session_id=str(session_id or ""),
-                                is_streaming=False,
-                                is_estimated=is_est,
-                                prompt_tokens=prompt_tok,
-                                completion_tokens=comp_tok,
-                                cached_tokens=cache_tok,
-                                total_tokens=tot_tok,
-                                duration_ms=duration_ms,
+                            model_name, provider_id = _resolve_model_and_provider(self, kwargs, resp)
+                            prompt_tok, comp_tok, cache_tok, tot_tok, is_est = _extract_usage_from_response(
+                                resp,
+                                prompt=str(prompt or ""),
+                                contexts=contexts,
+                                estimate_fallback=cfg.tracker.estimate_when_missing,
                             )
-                        )
-                        return resp
-                    finally:
-                        _IS_TRACKING.reset(token)
 
+                            # 异步入库
+                            asyncio.create_task(
+                                store.record_usage(
+                                    model=model_name,
+                                    provider_id=provider_id,
+                                    caller_type=caller_type,
+                                    caller_name=caller_name,
+                                    session_id=str(session_id or ""),
+                                    is_streaming=False,
+                                    is_estimated=is_est,
+                                    prompt_tokens=prompt_tok,
+                                    completion_tokens=comp_tok,
+                                    cached_tokens=cache_tok,
+                                    total_tokens=tot_tok,
+                                    duration_ms=duration_ms,
+                                )
+                            )
+                            return resp
+                        finally:
+                            _CURRENT_CALLER.reset(tok_caller)
+                            _IS_TRACKING.reset(token)
+
+                    return _coro_runner()
+
+                if hasattr(inspect, "markcoroutinefunction"):
+                    inspect.markcoroutinefunction(patched_text_chat)
                 return patched_text_chat
 
             cls.text_chat = _make_chat_wrapper(orig_chat)
@@ -562,78 +581,86 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
             _PATCHED_METHODS[(cls, "text_chat_stream")] = orig_stream
 
             def _make_stream_wrapper(original_fn: Any):
-                async def patched_text_chat_stream(
+                @functools.wraps(original_fn)
+                def patched_text_chat_stream(
                     self: Provider, *args: Any, **kwargs: Any
                 ) -> AsyncGenerator[LLMResponse, None]:
-                    cfg: PluginConfig = get_cfg()
-                    if not cfg.tracker.enable or not cfg.tracker.record_streaming or _IS_TRACKING.get():
-                        async for chunk in original_fn(self, *args, **kwargs):
-                            yield chunk
-                        return
+                    caller = _CURRENT_CALLER.get() or _identify_caller(offset=2)
 
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    session_id = kwargs.get("session_id") or ""
-                    prompt = kwargs.get("prompt") or (args[0] if args else "")
-                    contexts = kwargs.get("contexts")
-                    caller_type, caller_name = _identify_caller()
+                    async def _stream_runner():
+                        cfg: PluginConfig = get_cfg()
+                        if not cfg.tracker.enable or not cfg.tracker.record_streaming or _IS_TRACKING.get():
+                            async for chunk in original_fn(self, *args, **kwargs):
+                                yield chunk
+                            return
 
-                    accumulated_chunks = []
-                    captured_usage_chunk = None
+                        token = _IS_TRACKING.set(True)
+                        tok_caller = _CURRENT_CALLER.set(caller)
+                        start_time = time.time()
+                        session_id = kwargs.get("session_id") or ""
+                        prompt = kwargs.get("prompt") or (args[0] if args else "")
+                        contexts = kwargs.get("contexts")
+                        caller_type, caller_name = caller
 
-                    try:
-                        async for chunk in original_fn(self, *args, **kwargs):
-                            if chunk:
-                                accumulated_chunks.append(chunk)
-                                if getattr(chunk, "usage", None) or (
-                                    getattr(chunk, "raw_completion", None) and getattr(chunk.raw_completion, "usage", None)
-                                ):
-                                    captured_usage_chunk = chunk
-                            yield chunk
-                    finally:
-                        _IS_TRACKING.reset(token)
-                        duration_ms = (time.time() - start_time) * 1000.0
-                        prompt_tok, comp_tok, cache_tok, tot_tok = 0, 0, 0, 0
-                        is_est = False
+                        accumulated_chunks = []
+                        captured_usage_chunk = None
 
-                        if captured_usage_chunk:
-                            prompt_tok, comp_tok, cache_tok, tot_tok, is_est = _extract_usage_from_response(
-                                captured_usage_chunk,
-                                prompt=str(prompt or ""),
-                                contexts=contexts,
-                                estimate_fallback=False,
-                            )
+                        try:
+                            async for chunk in original_fn(self, *args, **kwargs):
+                                if chunk:
+                                    accumulated_chunks.append(chunk)
+                                    if getattr(chunk, "usage", None) or (
+                                        getattr(chunk, "raw_completion", None) and getattr(chunk.raw_completion, "usage", None)
+                                    ):
+                                        captured_usage_chunk = chunk
+                                yield chunk
+                        finally:
+                            _CURRENT_CALLER.reset(tok_caller)
+                            _IS_TRACKING.reset(token)
+                            duration_ms = (time.time() - start_time) * 1000.0
+                            prompt_tok, comp_tok, cache_tok, tot_tok = 0, 0, 0, 0
+                            is_est = False
 
-                        if tot_tok <= 0 and cfg.tracker.estimate_when_missing:
-                            full_text = "".join(
-                                getattr(c, "completion_text", "") or "" for c in accumulated_chunks
-                            )
-                            context_str = str(contexts) if isinstance(contexts, list) else ""
-                            prompt_tok = _estimate_tokens(str(prompt or "") + context_str)
-                            comp_tok = _estimate_tokens(full_text)
-                            tot_tok = prompt_tok + comp_tok
-                            is_est = True
-
-                        if tot_tok > 0:
-                            model_name, provider_id = _resolve_model_and_provider(
-                                self, kwargs, captured_usage_chunk
-                            )
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=model_name,
-                                    provider_id=provider_id,
-                                    caller_type=caller_type,
-                                    caller_name=caller_name,
-                                    session_id=str(session_id or ""),
-                                    is_streaming=True,
-                                    is_estimated=is_est,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=comp_tok,
-                                    cached_tokens=cache_tok,
-                                    total_tokens=tot_tok,
-                                    duration_ms=duration_ms,
+                            if captured_usage_chunk:
+                                prompt_tok, comp_tok, cache_tok, tot_tok, is_est = _extract_usage_from_response(
+                                    captured_usage_chunk,
+                                    prompt=str(prompt or ""),
+                                    contexts=contexts,
+                                    estimate_fallback=False,
                                 )
-                            )
+
+                            if tot_tok <= 0 and cfg.tracker.estimate_when_missing:
+                                full_text = "".join(
+                                    getattr(c, "completion_text", "") or "" for c in accumulated_chunks
+                                )
+                                context_str = str(contexts) if isinstance(contexts, list) else ""
+                                prompt_tok = _estimate_tokens(str(prompt or "") + context_str)
+                                comp_tok = _estimate_tokens(full_text)
+                                tot_tok = prompt_tok + comp_tok
+                                is_est = True
+
+                            if tot_tok > 0:
+                                model_name, provider_id = _resolve_model_and_provider(
+                                    self, kwargs, captured_usage_chunk
+                                )
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=model_name,
+                                        provider_id=provider_id,
+                                        caller_type=caller_type,
+                                        caller_name=caller_name,
+                                        session_id=str(session_id or ""),
+                                        is_streaming=True,
+                                        is_estimated=is_est,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=comp_tok,
+                                        cached_tokens=cache_tok,
+                                        total_tokens=tot_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+
+                    return _stream_runner()
 
                 return patched_text_chat_stream
 
@@ -699,57 +726,67 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
             _PATCHED_METHODS[(cls, "get_embedding")] = orig_ge
 
             def _make_embedding_wrapper(original_fn: Any):
-                async def patched_get_embedding(self: Any, text: str, *args: Any, **kwargs: Any) -> list[float]:
-                    cfg: PluginConfig = get_cfg()
-                    if (
-                        not cfg.tracker.enable
-                        or not getattr(cfg.tracker, "record_embedding", True)
-                        or _IS_TRACKING.get()
-                    ):
-                        return await original_fn(self, text, *args, **kwargs)
+                @functools.wraps(original_fn)
+                def patched_get_embedding(self: Any, text: str, *args: Any, **kwargs: Any) -> Any:
+                    caller = _CURRENT_CALLER.get() or _identify_caller(offset=2)
 
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    caller_type, caller_name = _identify_caller()
-                    _CAPTURED_EMBEDDING_USAGE.set(None)
+                    async def _coro_runner():
+                        cfg: PluginConfig = get_cfg()
+                        if (
+                            not cfg.tracker.enable
+                            or not getattr(cfg.tracker, "record_embedding", True)
+                            or _IS_TRACKING.get()
+                        ):
+                            return await original_fn(self, text, *args, **kwargs)
 
-                    try:
-                        res = await original_fn(self, text, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
-
-                        model_name, provider_id = _resolve_embedding_model_and_provider(self)
-                        captured = _CAPTURED_EMBEDDING_USAGE.get()
-                        if captured and captured[0] > 0:
-                            prompt_tok = captured[0]
-                            is_est = False
-                            if captured[1]:
-                                model_name = captured[1]
-                        else:
-                            prompt_tok = _estimate_tokens(str(text or ""))
-                            is_est = True
-
-                        if prompt_tok > 0:
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=model_name,
-                                    provider_id=provider_id,
-                                    caller_type=caller_type,
-                                    caller_name=caller_name,
-                                    session_id="",
-                                    is_streaming=False,
-                                    is_estimated=is_est,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=0,
-                                    cached_tokens=0,
-                                    total_tokens=prompt_tok,
-                                    duration_ms=duration_ms,
-                                )
-                            )
-                        return res
-                    finally:
+                        token = _IS_TRACKING.set(True)
+                        tok_caller = _CURRENT_CALLER.set(caller)
+                        start_time = time.time()
+                        caller_type, caller_name = caller
                         _CAPTURED_EMBEDDING_USAGE.set(None)
-                        _IS_TRACKING.reset(token)
 
+                        try:
+                            res = await original_fn(self, text, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
+
+                            model_name, provider_id = _resolve_embedding_model_and_provider(self)
+                            captured = _CAPTURED_EMBEDDING_USAGE.get()
+                            if captured and captured[0] > 0:
+                                prompt_tok = captured[0]
+                                is_est = False
+                                if captured[1]:
+                                    model_name = captured[1]
+                            else:
+                                prompt_tok = _estimate_tokens(str(text or ""))
+                                is_est = True
+
+                            if prompt_tok > 0:
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=model_name,
+                                        provider_id=provider_id,
+                                        caller_type=caller_type,
+                                        caller_name=caller_name,
+                                        session_id="",
+                                        is_streaming=False,
+                                        is_estimated=is_est,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=0,
+                                        cached_tokens=0,
+                                        total_tokens=prompt_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+                            return res
+                        finally:
+                            _CAPTURED_EMBEDDING_USAGE.set(None)
+                            _CURRENT_CALLER.reset(tok_caller)
+                            _IS_TRACKING.reset(token)
+
+                    return _coro_runner()
+
+                if hasattr(inspect, "markcoroutinefunction"):
+                    inspect.markcoroutinefunction(patched_get_embedding)
                 return patched_get_embedding
 
             cls.get_embedding = _make_embedding_wrapper(orig_ge)
@@ -760,60 +797,70 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
             _PATCHED_METHODS[(cls, "get_embeddings")] = orig_ges
 
             def _make_embeddings_wrapper(original_fn: Any):
-                async def patched_get_embeddings(
+                @functools.wraps(original_fn)
+                def patched_get_embeddings(
                     self: Any, text: list[str], *args: Any, **kwargs: Any
-                ) -> list[list[float]]:
-                    cfg: PluginConfig = get_cfg()
-                    if (
-                        not cfg.tracker.enable
-                        or not getattr(cfg.tracker, "record_embedding", True)
-                        or _IS_TRACKING.get()
-                    ):
-                        return await original_fn(self, text, *args, **kwargs)
+                ) -> Any:
+                    caller = _CURRENT_CALLER.get() or _identify_caller(offset=2)
 
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    caller_type, caller_name = _identify_caller()
-                    _CAPTURED_EMBEDDING_USAGE.set(None)
+                    async def _coro_runner():
+                        cfg: PluginConfig = get_cfg()
+                        if (
+                            not cfg.tracker.enable
+                            or not getattr(cfg.tracker, "record_embedding", True)
+                            or _IS_TRACKING.get()
+                        ):
+                            return await original_fn(self, text, *args, **kwargs)
 
-                    try:
-                        res = await original_fn(self, text, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
-
-                        model_name, provider_id = _resolve_embedding_model_and_provider(self)
-                        captured = _CAPTURED_EMBEDDING_USAGE.get()
-                        if captured and captured[0] > 0:
-                            prompt_tok = captured[0]
-                            is_est = False
-                            if captured[1]:
-                                model_name = captured[1]
-                        else:
-                            texts = text if isinstance(text, list) else [text]
-                            prompt_tok = sum(_estimate_tokens(str(t or "")) for t in texts)
-                            is_est = True
-
-                        if prompt_tok > 0:
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=model_name,
-                                    provider_id=provider_id,
-                                    caller_type=caller_type,
-                                    caller_name=caller_name,
-                                    session_id="",
-                                    is_streaming=False,
-                                    is_estimated=is_est,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=0,
-                                    cached_tokens=0,
-                                    total_tokens=prompt_tok,
-                                    duration_ms=duration_ms,
-                                )
-                            )
-                        return res
-                    finally:
+                        token = _IS_TRACKING.set(True)
+                        tok_caller = _CURRENT_CALLER.set(caller)
+                        start_time = time.time()
+                        caller_type, caller_name = caller
                         _CAPTURED_EMBEDDING_USAGE.set(None)
-                        _IS_TRACKING.reset(token)
 
+                        try:
+                            res = await original_fn(self, text, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
+
+                            model_name, provider_id = _resolve_embedding_model_and_provider(self)
+                            captured = _CAPTURED_EMBEDDING_USAGE.get()
+                            if captured and captured[0] > 0:
+                                prompt_tok = captured[0]
+                                is_est = False
+                                if captured[1]:
+                                    model_name = captured[1]
+                            else:
+                                texts = text if isinstance(text, list) else [text]
+                                prompt_tok = sum(_estimate_tokens(str(t or "")) for t in texts)
+                                is_est = True
+
+                            if prompt_tok > 0:
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=model_name,
+                                        provider_id=provider_id,
+                                        caller_type=caller_type,
+                                        caller_name=caller_name,
+                                        session_id="",
+                                        is_streaming=False,
+                                        is_estimated=is_est,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=0,
+                                        cached_tokens=0,
+                                        total_tokens=prompt_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+                            return res
+                        finally:
+                            _CAPTURED_EMBEDDING_USAGE.set(None)
+                            _CURRENT_CALLER.reset(tok_caller)
+                            _IS_TRACKING.reset(token)
+
+                    return _coro_runner()
+
+                if hasattr(inspect, "markcoroutinefunction"):
+                    inspect.markcoroutinefunction(patched_get_embeddings)
                 return patched_get_embeddings
 
             cls.get_embeddings = _make_embeddings_wrapper(orig_ges)

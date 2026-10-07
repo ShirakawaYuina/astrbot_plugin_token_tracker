@@ -538,3 +538,67 @@ async def test_caller_identification_contextvars_trace():
     assert caller_name == "astrbot_plugin_qq_group_daily_analysis"
 
 
+@pytest.mark.asyncio
+async def test_caller_identification_livingmemory_contextvar():
+    """测试 livingmemory 特异 ContextVar (livingmemory_query_embeddings) 的识别"""
+    from astrbot_plugin_token_tracker.interceptor import _identify_caller
+    import contextvars
+
+    var = contextvars.ContextVar("livingmemory_query_embeddings", default=None)
+    var.set({"cache": True})
+
+    caller_type, caller_name = _identify_caller()
+    assert caller_type == "plugin"
+    assert caller_name == "astrbot_plugin_livingmemory"
+
+
+@pytest.mark.asyncio
+async def test_embedding_interception_livingmemory_create_task():
+    """测试 livingmemory 通过 asyncio.create_task 调用 get_embedding 的同步调用边界识别"""
+    from astrbot.core.provider.provider import EmbeddingProvider
+
+    class MockEmbeddingProviderLivingMemory(EmbeddingProvider):
+        def __init__(self):
+            self.model = "gemini-embedding-2"
+            self.provider_config = {"id": "gemini_emb_provider", "embedding_model": "gemini-embedding-2"}
+
+        def get_dim(self):
+            return 768
+
+        async def get_embedding(self, text: str) -> list[float]:
+            return [0.1] * 768
+
+        async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1] * 768] * len(texts)
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+
+    cfg = PluginConfig()
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        inst = MockEmbeddingProviderLivingMemory()
+
+        # 模拟 livingmemory 在 contextvars 中设置 livingmemory_query_embeddings 并使用 asyncio.create_task
+        import contextvars
+        var = contextvars.ContextVar("livingmemory_query_embeddings", default=None)
+        var.set({})
+
+        task = asyncio.create_task(inst.get_embedding("那个异格皮肤不能用吧"))
+        res = await task
+        assert res is not None
+
+        await asyncio.sleep(0.05)
+
+        assert mock_store.record_usage.called
+        call_kwargs = mock_store.record_usage.call_args.kwargs
+        assert call_kwargs["caller_type"] == "plugin"
+        assert call_kwargs["caller_name"] == "astrbot_plugin_livingmemory"
+        assert call_kwargs["model"] == "gemini-embedding-2"
+    finally:
+        uninstall_interceptor()
+
+
+
