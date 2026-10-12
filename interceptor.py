@@ -356,45 +356,55 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 
 def _extract_usage_from_dict(resp_dict: Any) -> tuple[int, int, int, int]:
-    """提取生图/改图响应字典中的 (prompt_tokens, completion_tokens, cached_tokens, total_tokens)
-    
+    """提取生图/改图响应字典或对象中的 (prompt_tokens, completion_tokens, cached_tokens, total_tokens)
+
     兼容:
     1. OpenAI Responses API: output + usage {input_tokens, output_tokens, total_tokens, input_tokens_details: {cached_tokens}}
     2. OpenAI Chat/Completions: usage {prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details: {cached_tokens}}
     3. 代理/三方中转生图: usage {input_tokens/prompt_tokens, output_tokens/completion_tokens, total_tokens}
     4. 扁平顶层字典: {prompt_tokens, completion_tokens, total_tokens}
+    5. Python SDK Usage 对象或含属性的自定义对象 (如 Usage(input_tokens=13, output_tokens=343, total_tokens=356))
     """
-    if not isinstance(resp_dict, dict):
+    if not resp_dict:
         return 0, 0, 0, 0
 
-    has_nested_usage = isinstance(resp_dict.get("usage"), dict)
-    usage = resp_dict["usage"] if has_nested_usage else resp_dict
+    def _get_val(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    usage = _get_val(resp_dict, "usage")
+    if not usage:
+        usage = resp_dict
 
     cached_tokens = 0
-    in_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
-    if isinstance(in_details, dict):
-        cached_tokens = _safe_int(in_details.get("cached_tokens"), 0)
+    in_details = _get_val(usage, "input_tokens_details") or _get_val(usage, "prompt_tokens_details")
+    if in_details:
+        cached_tokens = _safe_int(_get_val(in_details, "cached_tokens"), 0)
 
     # 1. 提取输入 Token (Prompt)
-    raw_prompt = usage.get("input_tokens")
+    raw_prompt = _get_val(usage, "input_tokens")
     if raw_prompt is None:
-        raw_prompt = usage.get("prompt_tokens")
-    if raw_prompt is None and has_nested_usage and ("input_other" in usage or "input_cached" in usage):
-        raw_prompt = _safe_int(usage.get("input_other"), 0) + _safe_int(usage.get("input_cached"), 0)
+        raw_prompt = _get_val(usage, "prompt_tokens")
+    if raw_prompt is None:
+        input_other = _get_val(usage, "input_other")
+        input_cached = _get_val(usage, "input_cached")
+        if input_other is not None or input_cached is not None:
+            raw_prompt = _safe_int(input_other, 0) + _safe_int(input_cached, 0)
     prompt_tokens = _safe_int(raw_prompt, 0)
 
     # 2. 提取输出 Token (Completion)
-    raw_comp = usage.get("output_tokens")
+    raw_comp = _get_val(usage, "output_tokens")
     if raw_comp is None:
-        raw_comp = usage.get("completion_tokens")
-    if raw_comp is None and has_nested_usage:
-        raw_comp = usage.get("output", 0)
+        raw_comp = _get_val(usage, "completion_tokens")
+    if raw_comp is None:
+        raw_comp = _get_val(usage, "output")
     completion_tokens = _safe_int(raw_comp, 0)
 
     # 3. 提取或计算总 Token (Total)
-    raw_total = usage.get("total_tokens")
-    if raw_total is None and has_nested_usage:
-        raw_total = usage.get("total")
+    raw_total = _get_val(usage, "total_tokens")
+    if raw_total is None:
+        raw_total = _get_val(usage, "total")
 
     total_tokens = _safe_int(raw_total, 0)
     if total_tokens <= 0:
@@ -459,11 +469,245 @@ def _find_openai_image_gateway_classes() -> list[type]:
     return classes
 
 
+def ensure_image_gateway_interceptor(store: TrackerStore, get_cfg: Any) -> int:
+    """动态巡检并安装或重挂载 OpenAIImageGateway 拦截器。
+
+    支持生图插件初次载入、热重载（Hot Reload）以及多次保存配置后的类对象重建。
+    已打补丁的方法会被自动跳过，保证幂等。
+
+    Args:
+        store: Token 记录存储器。
+        get_cfg: 获取插件配置的回调函数。
+
+    Returns:
+        int: 新增打上拦截补丁的方法数量。
+    """
+    global _PATCHED_METHODS
+    patched_count = 0
+    image_gateway_classes = _find_openai_image_gateway_classes()
+
+    for gw_cls in image_gateway_classes:
+        # 1. Patch request_response
+        if "request_response" in gw_cls.__dict__:
+            orig_rr = gw_cls.__dict__["request_response"]
+            if not getattr(orig_rr, "_is_token_tracker_wrapper", False):
+                _PATCHED_METHODS[(gw_cls, "request_response")] = orig_rr
+
+                def _make_response_wrapper(original_fn: Any):
+                    async def patched_request_response(
+                        self: Any, payload: dict[str, Any], *args: Any, **kwargs: Any
+                    ) -> dict[str, Any]:
+                        cfg: PluginConfig = get_cfg()
+                        if (
+                            not cfg.tracker.enable
+                            or not getattr(cfg.tracker, "record_image", True)
+                            or _IS_TRACKING.get()
+                        ):
+                            return await original_fn(self, payload, *args, **kwargs)
+
+                        token = _IS_TRACKING.set(True)
+                        start_time = time.time()
+                        session_id = _extract_session_id_from_stack()
+                        try:
+                            resp = await original_fn(self, payload, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
+
+                            model_name = (
+                                (resp.get("model") if isinstance(resp, dict) else None)
+                                or (payload.get("model") if isinstance(payload, dict) else None)
+                                or "openai-image"
+                            )
+                            provider_id = _resolve_image_gateway_provider_id(self)
+                            prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
+                            is_estimated = False
+
+                            if tot_tok <= 0 and getattr(cfg.tracker, "estimate_when_missing", True):
+                                prompt_text = str(payload.get("prompt", "") or "")
+                                prompt_tok = _estimate_tokens(prompt_text)
+                                comp_tok = 1000
+                                tot_tok = prompt_tok + comp_tok
+                                is_estimated = True
+
+                            if tot_tok > 0:
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=str(model_name),
+                                        provider_id=str(provider_id),
+                                        caller_type="plugin",
+                                        caller_name="astrbot_plugin_openai_image",
+                                        session_id=str(session_id or ""),
+                                        is_streaming=False,
+                                        is_estimated=is_estimated,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=comp_tok,
+                                        cached_tokens=cache_tok,
+                                        total_tokens=tot_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+                            return resp
+                        finally:
+                            _IS_TRACKING.reset(token)
+
+                    patched_request_response._is_token_tracker_wrapper = True
+                    return patched_request_response
+
+                gw_cls.request_response = _make_response_wrapper(orig_rr)
+                patched_count += 1
+
+        # 2. Patch request_image_generation
+        if "request_image_generation" in gw_cls.__dict__:
+            orig_rig = gw_cls.__dict__["request_image_generation"]
+            if not getattr(orig_rig, "_is_token_tracker_wrapper", False):
+                _PATCHED_METHODS[(gw_cls, "request_image_generation")] = orig_rig
+
+                def _make_image_gen_wrapper(original_fn: Any):
+                    async def patched_request_image_generation(
+                        self: Any, payload: dict[str, Any], *args: Any, **kwargs: Any
+                    ) -> dict[str, Any]:
+                        cfg: PluginConfig = get_cfg()
+                        if (
+                            not cfg.tracker.enable
+                            or not getattr(cfg.tracker, "record_image", True)
+                            or _IS_TRACKING.get()
+                        ):
+                            return await original_fn(self, payload, *args, **kwargs)
+
+                        token = _IS_TRACKING.set(True)
+                        start_time = time.time()
+                        session_id = _extract_session_id_from_stack()
+                        try:
+                            resp = await original_fn(self, payload, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
+
+                            model_name = (
+                                (resp.get("model") if isinstance(resp, dict) else None)
+                                or (payload.get("model") if isinstance(payload, dict) else None)
+                                or "dall-e-3"
+                            )
+                            provider_id = _resolve_image_gateway_provider_id(self)
+                            prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
+                            is_estimated = False
+
+                            if tot_tok <= 0 and getattr(cfg.tracker, "estimate_when_missing", True):
+                                prompt_text = str(payload.get("prompt", "") or "")
+                                prompt_tok = _estimate_tokens(prompt_text)
+                                comp_tok = 1000
+                                tot_tok = prompt_tok + comp_tok
+                                is_estimated = True
+
+                            if tot_tok > 0:
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=str(model_name),
+                                        provider_id=str(provider_id),
+                                        caller_type="plugin",
+                                        caller_name="astrbot_plugin_openai_image",
+                                        session_id=str(session_id or ""),
+                                        is_streaming=False,
+                                        is_estimated=is_estimated,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=comp_tok,
+                                        cached_tokens=cache_tok,
+                                        total_tokens=tot_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+                            return resp
+                        finally:
+                            _IS_TRACKING.reset(token)
+
+                    patched_request_image_generation._is_token_tracker_wrapper = True
+                    return patched_request_image_generation
+
+                gw_cls.request_image_generation = _make_image_gen_wrapper(orig_rig)
+                patched_count += 1
+
+        # 3. Patch request_image_edit
+        if "request_image_edit" in gw_cls.__dict__:
+            orig_rie = gw_cls.__dict__["request_image_edit"]
+            if not getattr(orig_rie, "_is_token_tracker_wrapper", False):
+                _PATCHED_METHODS[(gw_cls, "request_image_edit")] = orig_rie
+
+                def _make_image_edit_wrapper(original_fn: Any):
+                    async def patched_request_image_edit(
+                        self: Any,
+                        data: dict[str, str],
+                        files: list[tuple[str, bytes, str]],
+                        *args: Any,
+                        **kwargs: Any,
+                    ) -> dict[str, Any]:
+                        cfg: PluginConfig = get_cfg()
+                        if (
+                            not cfg.tracker.enable
+                            or not getattr(cfg.tracker, "record_image", True)
+                            or _IS_TRACKING.get()
+                        ):
+                            return await original_fn(self, data, files, *args, **kwargs)
+
+                        token = _IS_TRACKING.set(True)
+                        start_time = time.time()
+                        session_id = _extract_session_id_from_stack()
+                        try:
+                            resp = await original_fn(self, data, files, *args, **kwargs)
+                            duration_ms = (time.time() - start_time) * 1000.0
+
+                            model_name = (
+                                (resp.get("model") if isinstance(resp, dict) else None)
+                                or (data.get("model") if isinstance(data, dict) else None)
+                                or "dall-e-2"
+                            )
+                            provider_id = _resolve_image_gateway_provider_id(self)
+                            prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
+                            is_estimated = False
+
+                            if tot_tok <= 0 and getattr(cfg.tracker, "estimate_when_missing", True):
+                                prompt_text = str(data.get("prompt", "") or "")
+                                prompt_tok = _estimate_tokens(prompt_text)
+                                comp_tok = 1000
+                                tot_tok = prompt_tok + comp_tok
+                                is_estimated = True
+
+                            if tot_tok > 0:
+                                asyncio.create_task(
+                                    store.record_usage(
+                                        model=str(model_name),
+                                        provider_id=str(provider_id),
+                                        caller_type="plugin",
+                                        caller_name="astrbot_plugin_openai_image",
+                                        session_id=str(session_id or ""),
+                                        is_streaming=False,
+                                        is_estimated=is_estimated,
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=comp_tok,
+                                        cached_tokens=cache_tok,
+                                        total_tokens=tot_tok,
+                                        duration_ms=duration_ms,
+                                    )
+                                )
+                            return resp
+                        finally:
+                            _IS_TRACKING.reset(token)
+
+                    patched_request_image_edit._is_token_tracker_wrapper = True
+                    return patched_request_image_edit
+
+                gw_cls.request_image_edit = _make_image_edit_wrapper(orig_rie)
+                patched_count += 1
+
+    if patched_count > 0:
+        logger.info(
+            f"token-tracker | OpenAIImageGateway AOP interceptor installed/re-installed on {patched_count} methods"
+        )
+    return patched_count
+
+
 def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
     """挂载全局切面拦截器至 LLM 对话 Provider 及 EmbeddingProvider 基类与所有具体提供商子类"""
     global _PATCHED_METHODS
 
     if _PATCHED_METHODS:
+        ensure_image_gateway_interceptor(store, get_cfg)
         return
 
     # 1. 尝试导入所有官方已内置的 provider 模块以确保子类完全注册
@@ -866,182 +1110,7 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
             cls.get_embeddings = _make_embeddings_wrapper(orig_ges)
 
     # 7. 对生图插件 OpenAIImageGateway 安装 AOP 拦截器
-    image_gateway_classes = _find_openai_image_gateway_classes()
-    for gw_cls in image_gateway_classes:
-        # Patch request_response
-        if "request_response" in gw_cls.__dict__:
-            orig_rr = gw_cls.__dict__["request_response"]
-            _PATCHED_METHODS[(gw_cls, "request_response")] = orig_rr
-
-            def _make_response_wrapper(original_fn: Any):
-                async def patched_request_response(
-                    self: Any, payload: dict[str, Any], *args: Any, **kwargs: Any
-                ) -> dict[str, Any]:
-                    cfg: PluginConfig = get_cfg()
-                    if (
-                        not cfg.tracker.enable
-                        or not getattr(cfg.tracker, "record_image", True)
-                        or _IS_TRACKING.get()
-                    ):
-                        return await original_fn(self, payload, *args, **kwargs)
-
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    session_id = _extract_session_id_from_stack()
-                    try:
-                        resp = await original_fn(self, payload, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
-
-                        model_name = (
-                            (resp.get("model") if isinstance(resp, dict) else None)
-                            or (payload.get("model") if isinstance(payload, dict) else None)
-                            or "openai-image"
-                        )
-                        provider_id = _resolve_image_gateway_provider_id(self)
-                        prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
-
-                        if tot_tok > 0:
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=str(model_name),
-                                    provider_id=str(provider_id),
-                                    caller_type="plugin",
-                                    caller_name="astrbot_plugin_openai_image",
-                                    session_id=str(session_id or ""),
-                                    is_streaming=False,
-                                    is_estimated=False,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=comp_tok,
-                                    cached_tokens=cache_tok,
-                                    total_tokens=tot_tok,
-                                    duration_ms=duration_ms,
-                                )
-                            )
-                        return resp
-                    finally:
-                        _IS_TRACKING.reset(token)
-
-                return patched_request_response
-
-            gw_cls.request_response = _make_response_wrapper(orig_rr)
-
-        # Patch request_image_generation
-        if "request_image_generation" in gw_cls.__dict__:
-            orig_rig = gw_cls.__dict__["request_image_generation"]
-            _PATCHED_METHODS[(gw_cls, "request_image_generation")] = orig_rig
-
-            def _make_image_gen_wrapper(original_fn: Any):
-                async def patched_request_image_generation(
-                    self: Any, payload: dict[str, Any], *args: Any, **kwargs: Any
-                ) -> dict[str, Any]:
-                    cfg: PluginConfig = get_cfg()
-                    if (
-                        not cfg.tracker.enable
-                        or not getattr(cfg.tracker, "record_image", True)
-                        or _IS_TRACKING.get()
-                    ):
-                        return await original_fn(self, payload, *args, **kwargs)
-
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    session_id = _extract_session_id_from_stack()
-                    try:
-                        resp = await original_fn(self, payload, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
-
-                        model_name = (
-                            (resp.get("model") if isinstance(resp, dict) else None)
-                            or (payload.get("model") if isinstance(payload, dict) else None)
-                            or "dall-e-3"
-                        )
-                        provider_id = _resolve_image_gateway_provider_id(self)
-                        prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
-
-                        if tot_tok > 0:
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=str(model_name),
-                                    provider_id=str(provider_id),
-                                    caller_type="plugin",
-                                    caller_name="astrbot_plugin_openai_image",
-                                    session_id=str(session_id or ""),
-                                    is_streaming=False,
-                                    is_estimated=False,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=comp_tok,
-                                    cached_tokens=cache_tok,
-                                    total_tokens=tot_tok,
-                                    duration_ms=duration_ms,
-                                )
-                            )
-                        return resp
-                    finally:
-                        _IS_TRACKING.reset(token)
-
-                return patched_request_image_generation
-
-            gw_cls.request_image_generation = _make_image_gen_wrapper(orig_rig)
-
-        # Patch request_image_edit
-        if "request_image_edit" in gw_cls.__dict__:
-            orig_rie = gw_cls.__dict__["request_image_edit"]
-            _PATCHED_METHODS[(gw_cls, "request_image_edit")] = orig_rie
-
-            def _make_image_edit_wrapper(original_fn: Any):
-                async def patched_request_image_edit(
-                    self: Any,
-                    data: dict[str, str],
-                    files: list[tuple[str, bytes, str]],
-                    *args: Any,
-                    **kwargs: Any,
-                ) -> dict[str, Any]:
-                    cfg: PluginConfig = get_cfg()
-                    if (
-                        not cfg.tracker.enable
-                        or not getattr(cfg.tracker, "record_image", True)
-                        or _IS_TRACKING.get()
-                    ):
-                        return await original_fn(self, data, files, *args, **kwargs)
-
-                    token = _IS_TRACKING.set(True)
-                    start_time = time.time()
-                    session_id = _extract_session_id_from_stack()
-                    try:
-                        resp = await original_fn(self, data, files, *args, **kwargs)
-                        duration_ms = (time.time() - start_time) * 1000.0
-
-                        model_name = (
-                            (resp.get("model") if isinstance(resp, dict) else None)
-                            or (data.get("model") if isinstance(data, dict) else None)
-                            or "dall-e-2"
-                        )
-                        provider_id = _resolve_image_gateway_provider_id(self)
-                        prompt_tok, comp_tok, cache_tok, tot_tok = _extract_usage_from_dict(resp)
-
-                        if tot_tok > 0:
-                            asyncio.create_task(
-                                store.record_usage(
-                                    model=str(model_name),
-                                    provider_id=str(provider_id),
-                                    caller_type="plugin",
-                                    caller_name="astrbot_plugin_openai_image",
-                                    session_id=str(session_id or ""),
-                                    is_streaming=False,
-                                    is_estimated=False,
-                                    prompt_tokens=prompt_tok,
-                                    completion_tokens=comp_tok,
-                                    cached_tokens=cache_tok,
-                                    total_tokens=tot_tok,
-                                    duration_ms=duration_ms,
-                                )
-                            )
-                        return resp
-                    finally:
-                        _IS_TRACKING.reset(token)
-
-                return patched_request_image_edit
-
-            gw_cls.request_image_edit = _make_image_edit_wrapper(orig_rie)
+    ensure_image_gateway_interceptor(store, get_cfg)
 
     # 8. 对 AstrBot Context.llm_generate 及 Context.tool_loop_agent 安装 AOP 拦截器
     # 确保通过 context.llm_generate 发起（无论直接 await 还是通过 asyncio.create_task 包装）的 LLM 调用都能精准关联到发起插件

@@ -12,6 +12,7 @@ from astrbot_plugin_token_tracker.interceptor import (
     _extract_usage_from_dict,
     _extract_usage_from_response,
     _resolve_image_gateway_provider_id,
+    ensure_image_gateway_interceptor,
     install_interceptor,
     uninstall_interceptor,
 )
@@ -358,11 +359,11 @@ async def test_openai_image_gateway_interception():
 
     mock_store = MagicMock()
     mock_store.record_usage = AsyncMock()
-    cfg = PluginConfig()
+    cfg_holder = [PluginConfig()]
 
     uninstall_interceptor()
     try:
-        install_interceptor(mock_store, lambda: cfg)
+        install_interceptor(mock_store, lambda: cfg_holder[0])
 
         inst = MockOpenAIImageGateway()
 
@@ -417,13 +418,112 @@ async def test_openai_image_gateway_interception():
         assert call3["completion_tokens"] == 900
         assert call3["total_tokens"] == 930
 
-        # 4. 无 token 用量返回时跳过记录
+        # 4. 无 token 用量返回但开启估算时进行兜底估算
         mock_store.record_usage.reset_mock()
-        resp4 = await inst.request_response({"trigger_no_usage": True})
+        resp4 = await inst.request_response({"trigger_no_usage": True, "prompt": "a beautiful scenery"})
         assert resp4 is not None
+        await asyncio.sleep(0.05)
+        assert mock_store.record_usage.called
+        call4 = mock_store.record_usage.call_args.kwargs
+        assert call4["is_estimated"] is True
+        assert call4["completion_tokens"] == 1000
+        assert call4["total_tokens"] > 1000
+
+        # 5. 关闭估算且无 token 用量返回时跳过记录
+        from astrbot_plugin_token_tracker.plugin_config import TrackerSettingsConfig
+        cfg_holder[0] = PluginConfig(tracker=TrackerSettingsConfig(estimate_when_missing=False))
+        mock_store.record_usage.reset_mock()
+        resp5 = await inst.request_response({"trigger_no_usage": True})
+        assert resp5 is not None
         await asyncio.sleep(0.05)
         assert not mock_store.record_usage.called
 
+    finally:
+        uninstall_interceptor()
+        sys.modules.pop(fake_mod_name, None)
+
+
+def test_openai_image_gateway_object_usage():
+    """测试从自定义对象或 SDK Usage 对象中提取 token 用量"""
+    class DummyUsageObj:
+        input_tokens = 18
+        output_tokens = 320
+        total_tokens = 338
+
+    class DummyRespObj:
+        usage = DummyUsageObj()
+
+    p, c, k, tot = _extract_usage_from_dict(DummyRespObj())
+    assert p == 18
+    assert c == 320
+    assert k == 0
+    assert tot == 338
+
+
+@pytest.mark.asyncio
+async def test_openai_image_gateway_hot_reload():
+    """测试当生图插件热重载导致网关类被重新创建时，能够自动巡检并重新挂载拦截器"""
+    import sys
+    import types
+
+    fake_mod_name = "data.plugins.astrbot_plugin_openai_image.core.gateways.openai_image_gateway"
+
+    class GatewayV1:
+        async def request_response(self, payload):
+            return {
+                "model": "gpt-image-2",
+                "usage": {"total_tokens": 100},
+            }
+
+    fake_mod = types.ModuleType(fake_mod_name)
+    fake_mod.OpenAIImageGateway = GatewayV1
+    sys.modules[fake_mod_name] = fake_mod
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+    cfg = PluginConfig()
+
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        inst1 = GatewayV1()
+        await inst1.request_response({})
+        await asyncio.sleep(0.05)
+        assert mock_store.record_usage.call_count == 1
+        assert mock_store.record_usage.call_args.kwargs["total_tokens"] == 100
+
+        # 模拟插件热重载：模块被重新载入，创建了全新的类 GatewayV2
+        class GatewayV2:
+            async def request_response(self, payload):
+                return {
+                    "model": "gpt-image-2.5",
+                    "usage": {"total_tokens": 250},
+                }
+
+        fake_mod.OpenAIImageGateway = GatewayV2
+        mock_store.record_usage.reset_mock()
+
+        # 在调用 ensure_image_gateway_interceptor 之前，新类尚未打补丁
+        inst2_unpatched = GatewayV2()
+        await inst2_unpatched.request_response({})
+        await asyncio.sleep(0.05)
+        assert not mock_store.record_usage.called
+
+        # 触发动态重新挂载巡检机制
+        patched = ensure_image_gateway_interceptor(mock_store, lambda: cfg)
+        assert patched > 0
+
+        # 验证新类已被正确挂载拦截器并记录 token
+        await inst2_unpatched.request_response({})
+        await asyncio.sleep(0.05)
+        assert mock_store.record_usage.called
+        assert mock_store.record_usage.call_args.kwargs["model"] == "gpt-image-2.5"
+        assert mock_store.record_usage.call_args.kwargs["total_tokens"] == 250
+
+        # 验证重复调用具有幂等性（不会重复 wrap）
+        patched_again = ensure_image_gateway_interceptor(mock_store, lambda: cfg)
+        assert patched_again == 0
     finally:
         uninstall_interceptor()
         sys.modules.pop(fake_mod_name, None)

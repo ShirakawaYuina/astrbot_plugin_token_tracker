@@ -10,7 +10,11 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from .interceptor import install_interceptor, uninstall_interceptor
+from .interceptor import (
+    ensure_image_gateway_interceptor,
+    install_interceptor,
+    uninstall_interceptor,
+)
 from .plugin_config import PluginConfig, parse_plugin_config
 from .tracker_store import TrackerStore
 from .web_api import TokenTrackerWebApi
@@ -22,6 +26,7 @@ class Main(star.Star):
         self.context = context
         self.config = config or {}
         self._cfg_cache: PluginConfig | None = None
+        self._watchdog_task: asyncio.Task | None = None
 
         plugin_data_dir = (
             Path(get_astrbot_data_path())
@@ -36,6 +41,7 @@ class Main(star.Star):
         cfg = self._cfg()
         if cfg.tracker.enable:
             install_interceptor(self.store, self._cfg)
+            self._watchdog_task = asyncio.create_task(self._interceptor_watchdog())
         else:
             logger.info("token-tracker | Tracker is disabled in configuration.")
 
@@ -54,8 +60,41 @@ class Main(star.Star):
 
     async def terminate(self) -> None:
         logger.info("token-tracker | Plugin terminating...")
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
         uninstall_interceptor()
         logger.info("token-tracker | Plugin terminated.")
+
+    async def _interceptor_watchdog(self) -> None:
+        """后台轻量巡检协程：定时检查第三方插件是否被热重载，必要时自动重新挂载拦截器。"""
+        while True:
+            try:
+                await asyncio.sleep(5)
+                cfg = self._cfg()
+                if cfg.tracker.enable and getattr(cfg.tracker, "record_image", True):
+                    ensure_image_gateway_interceptor(self.store, self._cfg)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug("token-tracker | interceptor watchdog: %s", e)
+
+    @filter.on_plugin_loaded()
+    async def on_plugin_loaded(self, metadata: Any = None) -> None:
+        """当 AstrBot 中有任何插件加载或热重载时触发，立即同步检查并修补拦截器。"""
+        cfg = self._cfg()
+        if cfg.tracker.enable:
+            ensure_image_gateway_interceptor(self.store, self._cfg)
+
+    @filter.on_decorating_result()
+    async def on_decorating_result(self, event: AstrMessageEvent) -> None:
+        """消息处理流程中轻量自检，确保切面有效。"""
+        cfg = self._cfg()
+        if cfg.tracker.enable:
+            ensure_image_gateway_interceptor(self.store, self._cfg)
 
     @filter.command("token", alias={"tokens"})
     async def token_command(
