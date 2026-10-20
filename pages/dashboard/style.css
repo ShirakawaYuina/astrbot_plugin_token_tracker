@@ -269,6 +269,16 @@ body.dashboard-body {
   color: var(--text-muted);
 }
 
+.kpi-date-range {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Charts */
 .charts-row {
   display: grid;

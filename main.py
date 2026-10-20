@@ -153,6 +153,9 @@ class Main(star.Star):
 
         total_tokens = summary.get("total_tokens", 0)
         total_calls = summary.get("total_calls", 0)
+        start_date = summary.get("start_date") or summary.get("earliest_date") or ""
+        end_date = summary.get("end_date") or summary.get("latest_date") or ""
+        range_str = f"{start_date} ~ {end_date}" if (start_date and end_date and start_date != end_date) else (start_date or "")
 
         cost_total = self._calculate_cost(total_tokens, cfg)
         cost_today = self._calculate_cost(today_tokens, cfg)
@@ -171,6 +174,7 @@ class Main(star.Star):
             f"📈 历史累计：",
             f"  • 总计: {total_tokens:,} tokens",
             f"  • 调用: {total_calls:,} 次",
+            f"  • 范围: {range_str or '暂无数据'}",
             "━━━━━━━━━━━━━━━━━━━━",
         ]
 

@@ -61,6 +61,8 @@ async def test_web_api_routes():
         body = json.loads(res_overview.body.decode("utf-8"))
         assert body["total_tokens"] == 150
         assert body["today_tokens"] == 150
+        assert "start_date" in body
+        assert "end_date" in body
 
         # 2. 模型
         res_models = await api.get_models()

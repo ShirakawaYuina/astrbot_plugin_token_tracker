@@ -76,6 +76,10 @@ async def test_tracker_store_crud():
         assert overview["today_tokens"] == 150 + 280 + 400
         assert overview["today_cached_tokens"] == 20
         assert overview["today_calls"] == 3
+        assert overview["start_date"] != ""
+        assert overview["end_date"] != ""
+        assert overview["earliest_date"] != ""
+        assert overview["latest_date"] != "" 
 
         # 6. 按模型聚合
         model_aggs = await store.get_model_aggregation()

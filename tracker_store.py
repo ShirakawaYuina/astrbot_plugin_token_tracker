@@ -170,7 +170,11 @@ class TrackerStore:
                             COALESCE(SUM(total_tokens), 0) as total_tokens,
                             COUNT(DISTINCT model) as distinct_models,
                             COUNT(DISTINCT caller_name) as distinct_callers,
-                            COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms
+                            COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms,
+                            MIN(date_str) as earliest_date,
+                            MAX(date_str) as latest_date,
+                            MIN(datetime_str) as earliest_datetime,
+                            MAX(datetime_str) as latest_datetime
                         FROM token_records
                         """
                     ).fetchone()
@@ -237,7 +241,11 @@ class TrackerStore:
                             COALESCE(SUM(cached_tokens), 0) as period_cached,
                             COUNT(DISTINCT model) as period_distinct_models,
                             COUNT(DISTINCT caller_name) as period_distinct_callers,
-                            COALESCE(AVG(duration_ms), 0.0) as period_avg_duration
+                            COALESCE(AVG(duration_ms), 0.0) as period_avg_duration,
+                            MIN(date_str) as period_earliest_date,
+                            MAX(date_str) as period_latest_date,
+                            MIN(datetime_str) as period_earliest_datetime,
+                            MAX(datetime_str) as period_latest_datetime
                         FROM token_records
                         {period_where}
                         """,
@@ -272,6 +280,18 @@ class TrackerStore:
                         "period_distinct_models": int(period_row["period_distinct_models"]),
                         "period_distinct_callers": int(period_row["period_distinct_callers"]),
                         "period_avg_duration_ms": round(float(period_row["period_avg_duration"]), 1),
+                        "start_date": total_row["earliest_date"] or "",
+                        "end_date": total_row["latest_date"] or "",
+                        "start_datetime": total_row["earliest_datetime"] or "",
+                        "end_datetime": total_row["latest_datetime"] or "",
+                        "earliest_date": total_row["earliest_date"] or "",
+                        "latest_date": total_row["latest_date"] or "",
+                        "earliest_datetime": total_row["earliest_datetime"] or "",
+                        "latest_datetime": total_row["latest_datetime"] or "",
+                        "period_start_date": period_row["period_earliest_date"] or "",
+                        "period_end_date": period_row["period_latest_date"] or "",
+                        "period_start_datetime": period_row["period_earliest_datetime"] or "",
+                        "period_end_datetime": period_row["period_latest_datetime"] or "",
                     }
 
             return await loop.run_in_executor(None, _query)

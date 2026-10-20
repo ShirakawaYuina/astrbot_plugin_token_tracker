@@ -279,6 +279,29 @@ async function loadOverview() {
     $("kpi-total-tokens").textContent = formatNumber(totalTokens);
     $("kpi-total-sub").textContent = `历史调用: ${formatNumber(data.total_calls || 0)} 次`;
 
+    const startDate = data.start_date || data.earliest_date || "";
+    const endDate = data.end_date || data.latest_date || "";
+    const startDt = data.start_datetime || data.earliest_datetime || "";
+    const endDt = data.end_datetime || data.latest_datetime || "";
+
+    const rangeEl = $("kpi-total-range");
+    if (rangeEl) {
+      if (startDate && endDate) {
+        if (startDate === endDate) {
+          rangeEl.textContent = `统计范围: ${startDate}`;
+        } else {
+          rangeEl.textContent = `统计范围: ${startDate} ~ ${endDate}`;
+        }
+        if (startDt && endDt) {
+          rangeEl.title = `起止时间: ${startDt} 至 ${endDt}`;
+        }
+      } else if (startDate) {
+        rangeEl.textContent = `统计范围: ${startDate}`;
+      } else {
+        rangeEl.textContent = `统计范围: 暂无数据`;
+      }
+    }
+
   } catch (err) {
     console.error("Failed to load overview:", err);
     $("kpi-today-tokens").textContent = "0";
@@ -287,6 +310,7 @@ async function loadOverview() {
     $("kpi-today-avg-time").textContent = "平均耗时: 0 ms";
     $("kpi-total-tokens").textContent = "0";
     $("kpi-total-sub").textContent = "历史调用: 0 次";
+    if ($("kpi-total-range")) $("kpi-total-range").textContent = "统计范围: 暂无数据";
     $("kpi-cached-tokens").textContent = "0";
     $("kpi-cached-rate").textContent = "缓存命中率: 0.0%";
   }
