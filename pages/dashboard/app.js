@@ -18,50 +18,50 @@ const RANGE_CONFIG = {
     badge: "全部时间",
     primaryLabel: "今日 Token 消耗",
     secondaryLabel: "今日调用次数",
-    trendTitle: "📈 近 14 天用量趋势",
-    modelTitle: "🤖 各模型消耗占比",
+    trendTitle: "近 14 天用量走势",
+    modelTitle: "各模型消耗占比",
   },
   today: {
     badge: "今日",
     primaryLabel: "今日 Token 消耗",
     secondaryLabel: "今日调用次数",
-    trendTitle: "📈 今日逐小时用量分布",
-    modelTitle: "🤖 今日模型消耗占比",
+    trendTitle: "今日逐小时用量分布",
+    modelTitle: "今日模型消耗占比",
   },
   yesterday: {
     badge: "昨日",
     primaryLabel: "昨日 Token 消耗",
     secondaryLabel: "昨日调用次数",
-    trendTitle: "📈 昨日逐小时用量分布",
-    modelTitle: "🤖 昨日模型消耗占比",
+    trendTitle: "昨日逐小时用量分布",
+    modelTitle: "昨日模型消耗占比",
   },
   "7d": {
     badge: "近 7 天",
     primaryLabel: "近 7 天 Token 消耗",
     secondaryLabel: "近 7 天调用次数",
-    trendTitle: "📈 近 7 天用量趋势",
-    modelTitle: "🤖 近 7 天模型消耗占比",
+    trendTitle: "近 7 天用量走势",
+    modelTitle: "近 7 天模型消耗占比",
   },
   "30d": {
     badge: "近 30 天",
     primaryLabel: "近 30 天 Token 消耗",
     secondaryLabel: "近 30 天调用次数",
-    trendTitle: "📈 近 30 天用量趋势",
-    modelTitle: "🤖 近 30 天模型消耗占比",
+    trendTitle: "近 30 天用量走势",
+    modelTitle: "近 30 天模型消耗占比",
   },
   this_month: {
     badge: "本月",
     primaryLabel: "本月 Token 消耗",
     secondaryLabel: "本月调用次数",
-    trendTitle: "📈 本月用量趋势",
-    modelTitle: "🤖 本月模型消耗占比",
+    trendTitle: "本月用量走势",
+    modelTitle: "本月模型消耗占比",
   },
   custom: {
     badge: "自定义范围",
     primaryLabel: "时段 Token 消耗",
     secondaryLabel: "时段调用次数",
-    trendTitle: "📈 所选时段用量分布",
-    modelTitle: "🤖 所选时段模型消耗占比",
+    trendTitle: "所选时段用量分布",
+    modelTitle: "所选时段模型消耗占比",
   },
 };
 
@@ -332,7 +332,7 @@ async function loadModelsAndCallers() {
     const cfg = RANGE_CONFIG[currentTimeRange] || RANGE_CONFIG.all;
     let modelTitle = cfg.modelTitle;
     if (currentTimeRange === "custom" && customStartDate && customEndDate) {
-      modelTitle = `🤖 模型消耗占比 (${customStartDate} ~ ${customEndDate})`;
+      modelTitle = `模型消耗占比 (${customStartDate} ~ ${customEndDate})`;
     }
     if ($("model-chart-title")) {
       $("model-chart-title").textContent = modelTitle;
@@ -359,6 +359,50 @@ async function loadModelsAndCallers() {
           </tr>
         `;
       }).join("");
+    }
+
+    // 渲染模型全量排行表（Tab 2）
+    const fullModelsTbody = $("models-table-body-full");
+    if (fullModelsTbody) {
+      if (models.length === 0) {
+        fullModelsTbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无模型调用记录</td></tr>';
+      } else {
+        fullModelsTbody.innerHTML = models.map((m) => {
+          const pct = ((m.total_tokens / periodTokens) * 100).toFixed(1);
+          return `
+            <tr>
+              <td><strong>${m.model}</strong></td>
+              <td>${formatNumber(m.prompt_tokens)}</td>
+              <td>${formatNumber(m.completion_tokens)}</td>
+              <td>${formatNumber(m.total_tokens)}</td>
+              <td>${formatNumber(m.call_count)}</td>
+              <td><span class="badge badge-blue">${pct}%</span></td>
+            </tr>
+          `;
+        }).join("");
+      }
+    }
+
+    // 渲染来源全量排行表（Tab 3）
+    const fullCallersTbody = $("callers-table-body-full");
+    if (fullCallersTbody) {
+      if (callers.length === 0) {
+        fullCallersTbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无来源调用记录</td></tr>';
+      } else {
+        fullCallersTbody.innerHTML = callers.map((c) => {
+          const typeBadge = c.caller_type === "plugin" ? "badge-purple" : "badge-gray";
+          return `
+            <tr>
+              <td><strong>${c.caller_name}</strong></td>
+              <td><span class="badge ${typeBadge}">${c.caller_type}</span></td>
+              <td>${formatNumber(c.prompt_tokens)}</td>
+              <td>${formatNumber(c.completion_tokens)}</td>
+              <td>${formatNumber(c.total_tokens)}</td>
+              <td>${formatNumber(c.call_count)}</td>
+            </tr>
+          `;
+        }).join("");
+      }
     }
 
     // 渲染来源排行表
@@ -459,16 +503,16 @@ async function loadTrend() {
     let trendTitle = cfg.trendTitle;
     if (data.mode === "hourly") {
       if (currentTimeRange === "yesterday") {
-        trendTitle = "📈 昨日逐小时用量分布";
+        trendTitle = "昨日逐小时用量分布";
       } else if (currentTimeRange === "today") {
-        trendTitle = "📈 今日逐小时用量分布";
+        trendTitle = "今日逐小时用量分布";
       } else if (currentTimeRange === "custom") {
-        trendTitle = `📈 逐小时用量分布 (${customStartDate})`;
+        trendTitle = `逐小时用量分布 (${customStartDate})`;
       } else {
-        trendTitle = "📈 逐小时用量分布";
+        trendTitle = "逐小时用量分布";
       }
     } else if (currentTimeRange === "custom" && customStartDate && customEndDate) {
-      trendTitle = `📈 用量趋势 (${customStartDate} ~ ${customEndDate})`;
+      trendTitle = `用量趋势 (${customStartDate} ~ ${customEndDate})`;
     }
     if ($("trend-chart-title")) {
       $("trend-chart-title").textContent = trendTitle;
@@ -598,6 +642,23 @@ async function refreshAll() {
 }
 
 function bindEvents() {
+  // 标签页切换 (Vuetify V-Tabs)
+  const tabItems = document.querySelectorAll("#main-tabs-bar .v-tab-item");
+  tabItems.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      tabItems.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      const targetId = tab.getAttribute("data-tab");
+      document.querySelectorAll(".tab-content-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === targetId);
+      });
+      if (targetId === "tab-overview") {
+        if (modelPieChartInstance) modelPieChartInstance.resize();
+        if (trendLineChartInstance) trendLineChartInstance.resize();
+      }
+    });
+  });
+
   // 刷新按钮
   const refreshBtn = $("btn-refresh");
   if (refreshBtn) {
@@ -694,7 +755,7 @@ function bindEvents() {
   const clearBtn = $("btn-clear");
   if (clearBtn) {
     clearBtn.addEventListener("click", async () => {
-      if (!confirm("⚠️ 确定要清空所有历史 Token 记录吗？清空后不可恢复！")) {
+      if (!confirm("确定要清空所有历史 Token 记录吗？清空后不可恢复！")) {
         return;
       }
       try {
