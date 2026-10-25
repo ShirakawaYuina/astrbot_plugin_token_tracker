@@ -230,7 +230,7 @@ class TokenTrackerWebApi:
                 "输出 Token",
                 "缓存 Token",
                 "总计 Token",
-                "响应耗时(ms)",
+                "响应耗时(s)",
             ])
             for r in items:
                 writer.writerow([
@@ -247,7 +247,7 @@ class TokenTrackerWebApi:
                     r.get("completion_tokens"),
                     r.get("cached_tokens"),
                     r.get("total_tokens"),
-                    f"{r.get('duration_ms', 0):.1f}",
+                    f"{r.get('duration_ms', 0) / 1000.0:.2f}",
                 ])
 
             content = buf.getvalue().encode("utf-8-sig")

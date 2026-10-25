@@ -249,7 +249,7 @@ async function loadOverview() {
       $("kpi-today-sub").textContent = `输入: ${formatNumber(todayPrompt)}${cacheNote} | 输出: ${formatNumber(todayCompletion)}`;
 
       $("kpi-today-calls").textContent = formatNumber(data.today_calls || 0);
-      $("kpi-today-avg-time").textContent = `平均耗时: ${(data.today_avg_duration_ms || data.avg_duration_ms || 0).toFixed(0)} ms`;
+      $("kpi-today-avg-time").textContent = `平均耗时: ${((data.today_avg_duration_ms || data.avg_duration_ms || 0) / 1000).toFixed(2)} s`;
 
       const cachedTokens = data.total_cached_tokens || 0;
       const totalTokens = data.total_tokens || 0;
@@ -267,7 +267,7 @@ async function loadOverview() {
       $("kpi-today-sub").textContent = `输入: ${formatNumber(periodPrompt)}${cacheNote} | 输出: ${formatNumber(periodCompletion)}`;
 
       $("kpi-today-calls").textContent = formatNumber(data.period_calls || 0);
-      $("kpi-today-avg-time").textContent = `平均耗时: ${(data.period_avg_duration_ms || 0).toFixed(0)} ms`;
+      $("kpi-today-avg-time").textContent = `平均耗时: ${((data.period_avg_duration_ms || 0) / 1000).toFixed(2)} s`;
 
       const hitRate = periodTokens > 0 ? ((periodCached / periodTokens) * 100).toFixed(1) : "0.0";
       $("kpi-cached-tokens").textContent = formatNumber(periodCached);
@@ -307,7 +307,7 @@ async function loadOverview() {
     $("kpi-today-tokens").textContent = "0";
     $("kpi-today-sub").textContent = "输入: 0 | 输出: 0";
     $("kpi-today-calls").textContent = "0";
-    $("kpi-today-avg-time").textContent = "平均耗时: 0 ms";
+    $("kpi-today-avg-time").textContent = "平均耗时: 0.00 s";
     $("kpi-total-tokens").textContent = "0";
     $("kpi-total-sub").textContent = "历史调用: 0 次";
     if ($("kpi-total-range")) $("kpi-total-range").textContent = "统计范围: 暂无数据";
@@ -620,7 +620,7 @@ async function loadRecords(page = 1) {
           <td>${formatNumber(r.completion_tokens)}</td>
           <td>${formatNumber(r.cached_tokens)}</td>
           <td><strong>${formatNumber(r.total_tokens)}</strong></td>
-          <td>${(r.duration_ms || 0).toFixed(0)} ms</td>
+          <td>${((r.duration_ms || 0) / 1000).toFixed(2)} s</td>
           <td>${modeBadge} ${estBadge}</td>
         </tr>
       `;
