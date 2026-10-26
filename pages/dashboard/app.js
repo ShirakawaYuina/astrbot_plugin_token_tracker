@@ -341,24 +341,26 @@ async function loadModelsAndCallers() {
     // 渲染环形饼图
     renderModelPieChart(models);
 
-    // 渲染模型排行表
+    // 渲染模型排行表 (概览页已精简，若存在则更新)
     const modelsTbody = $("models-table-body");
-    if (models.length === 0) {
-      modelsTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无模型调用记录</td></tr>`;
-    } else {
-      modelsTbody.innerHTML = models.slice(0, 10).map((m) => {
-        const pct = ((m.total_tokens / periodTokens) * 100).toFixed(1);
-        return `
-          <tr>
-            <td><strong>${m.model}</strong></td>
-            <td>${formatNumber(m.prompt_tokens)}</td>
-            <td>${formatNumber(m.completion_tokens)}</td>
-            <td>${formatNumber(m.total_tokens)}</td>
-            <td>${formatNumber(m.call_count)}</td>
-            <td><span class="badge badge-blue">${pct}%</span></td>
-          </tr>
-        `;
-      }).join("");
+    if (modelsTbody) {
+      if (models.length === 0) {
+        modelsTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无模型调用记录</td></tr>`;
+      } else {
+        modelsTbody.innerHTML = models.slice(0, 10).map((m) => {
+          const pct = ((m.total_tokens / periodTokens) * 100).toFixed(1);
+          return `
+            <tr>
+              <td><strong>${m.model}</strong></td>
+              <td>${formatNumber(m.prompt_tokens)}</td>
+              <td>${formatNumber(m.completion_tokens)}</td>
+              <td>${formatNumber(m.total_tokens)}</td>
+              <td>${formatNumber(m.call_count)}</td>
+              <td><span class="badge badge-blue">${pct}%</span></td>
+            </tr>
+          `;
+        }).join("");
+      }
     }
 
     // 渲染模型全量排行表（Tab 2）
@@ -405,29 +407,31 @@ async function loadModelsAndCallers() {
       }
     }
 
-    // 渲染来源排行表
+    // 渲染来源排行表 (概览页已精简，若存在则更新)
     const callersTbody = $("callers-table-body");
-    if (callers.length === 0) {
-      callersTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无来源调用记录</td></tr>`;
-    } else {
-      callersTbody.innerHTML = callers.slice(0, 10).map((c) => {
-        const typeBadge = c.caller_type === "plugin" ? "badge-purple" : "badge-gray";
-        return `
-          <tr>
-            <td><strong>${c.caller_name}</strong></td>
-            <td><span class="badge ${typeBadge}">${c.caller_type}</span></td>
-            <td>${formatNumber(c.prompt_tokens)}</td>
-            <td>${formatNumber(c.completion_tokens)}</td>
-            <td>${formatNumber(c.total_tokens)}</td>
-            <td>${formatNumber(c.call_count)}</td>
-          </tr>
-        `;
-      }).join("");
+    if (callersTbody) {
+      if (callers.length === 0) {
+        callersTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无来源调用记录</td></tr>`;
+      } else {
+        callersTbody.innerHTML = callers.slice(0, 10).map((c) => {
+          const typeBadge = c.caller_type === "plugin" ? "badge-purple" : "badge-gray";
+          return `
+            <tr>
+              <td><strong>${c.caller_name}</strong></td>
+              <td><span class="badge ${typeBadge}">${c.caller_type}</span></td>
+              <td>${formatNumber(c.prompt_tokens)}</td>
+              <td>${formatNumber(c.completion_tokens)}</td>
+              <td>${formatNumber(c.total_tokens)}</td>
+              <td>${formatNumber(c.call_count)}</td>
+            </tr>
+          `;
+        }).join("");
+      }
     }
   } catch (err) {
     console.error("Failed to load models/callers:", err);
-    $("models-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
-    $("callers-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
+    if ($("models-table-body")) $("models-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
+    if ($("callers-table-body")) $("callers-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
   }
 }
 

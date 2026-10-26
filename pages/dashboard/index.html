@@ -21,7 +21,7 @@
         </div>
         <div class="title-row">
           <h1 class="header-title">Token 用量看板</h1>
-          <span class="version-chip">v1.0.9</span>
+          <span class="version-chip">v1.0.10</span>
           <span class="live-status-chip">
             <span class="live-dot"></span>
             <span>实时监控中</span>
@@ -171,61 +171,6 @@
           </div>
           <div class="chart-canvas-wrapper">
             <canvas id="trendLineChart"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <!-- Overview Rankings Row -->
-      <div class="ranks-row">
-        <div class="rank-box">
-          <div class="box-header">
-            <h3 class="box-title">
-              <svg class="v-icon v-icon-stroke" width="16" height="16" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-              <span>热门模型排行</span>
-            </h3>
-          </div>
-          <div class="table-responsive">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>模型名称</th>
-                  <th>输入 Tokens</th>
-                  <th>输出 Tokens</th>
-                  <th>总 Tokens</th>
-                  <th>调用次数</th>
-                  <th>占比</th>
-                </tr>
-              </thead>
-              <tbody id="models-table-body">
-                <tr><td colspan="6" class="text-center">加载中...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="rank-box">
-          <div class="box-header">
-            <h3 class="box-title">
-              <svg class="v-icon v-icon-stroke" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17a3 3 0 0 0 6 0v-3h-3a3 3 0 0 0 0 6z"/></svg>
-              <span>调用来源 / 插件排行</span>
-            </h3>
-          </div>
-          <div class="table-responsive">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>来源名称</th>
-                  <th>类型</th>
-                  <th>输入 Tokens</th>
-                  <th>输出 Tokens</th>
-                  <th>总 Tokens</th>
-                  <th>调用次数</th>
-                </tr>
-              </thead>
-              <tbody id="callers-table-body">
-                <tr><td colspan="6" class="text-center">加载中...</td></tr>
-              </tbody>
-            </table>
           </div>
         </div>
       </div>
