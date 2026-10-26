@@ -21,7 +21,7 @@
         </div>
         <div class="title-row">
           <h1 class="header-title">Token 用量看板</h1>
-          <span class="version-chip">v1.0.6</span>
+          <span class="version-chip">v1.0.7</span>
           <span class="live-status-chip">
             <span class="live-dot"></span>
             <span>实时监控中</span>
@@ -164,8 +164,9 @@
           <div class="box-header">
             <h3 class="box-title">
               <svg class="v-icon v-icon-stroke" width="16" height="16" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-              <span id="trend-chart-title">近 14 天用量走势</span>
+              <span id="trend-chart-title">近 14 天用量走势与峰值</span>
             </h3>
+            <span class="trend-badge-pill" id="trend-stat-pill">日均 - tokens</span>
           </div>
           <div class="chart-canvas-wrapper">
             <canvas id="trendLineChart"></canvas>

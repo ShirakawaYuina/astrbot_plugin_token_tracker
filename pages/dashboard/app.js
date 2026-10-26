@@ -18,49 +18,49 @@ const RANGE_CONFIG = {
     badge: "全部时间",
     primaryLabel: "今日 Token 消耗",
     secondaryLabel: "今日调用次数",
-    trendTitle: "近 14 天用量走势",
+    trendTitle: "近 14 天用量走势与峰值",
     modelTitle: "各模型消耗占比",
   },
   today: {
     badge: "今日",
     primaryLabel: "今日 Token 消耗",
     secondaryLabel: "今日调用次数",
-    trendTitle: "今日逐小时用量分布",
+    trendTitle: "今日逐小时用量走势与峰值",
     modelTitle: "今日模型消耗占比",
   },
   yesterday: {
     badge: "昨日",
     primaryLabel: "昨日 Token 消耗",
     secondaryLabel: "昨日调用次数",
-    trendTitle: "昨日逐小时用量分布",
+    trendTitle: "昨日逐小时用量走势与峰值",
     modelTitle: "昨日模型消耗占比",
   },
   "7d": {
     badge: "近 7 天",
     primaryLabel: "近 7 天 Token 消耗",
     secondaryLabel: "近 7 天调用次数",
-    trendTitle: "近 7 天用量走势",
+    trendTitle: "近 7 天用量走势与峰值",
     modelTitle: "近 7 天模型消耗占比",
   },
   "30d": {
     badge: "近 30 天",
     primaryLabel: "近 30 天 Token 消耗",
     secondaryLabel: "近 30 天调用次数",
-    trendTitle: "近 30 天用量走势",
+    trendTitle: "近 30 天用量走势与峰值",
     modelTitle: "近 30 天模型消耗占比",
   },
   this_month: {
     badge: "本月",
     primaryLabel: "本月 Token 消耗",
     secondaryLabel: "本月调用次数",
-    trendTitle: "本月用量走势",
+    trendTitle: "本月用量走势与峰值",
     modelTitle: "本月模型消耗占比",
   },
   custom: {
     badge: "自定义范围",
     primaryLabel: "时段 Token 消耗",
     secondaryLabel: "时段调用次数",
-    trendTitle: "所选时段用量分布",
+    trendTitle: "所选时段用量走势与峰值",
     modelTitle: "所选时段模型消耗占比",
   },
 };
@@ -490,6 +490,18 @@ function renderModelPieChart(models) {
   });
 }
 
+function formatCompactTokens(val) {
+  if (val === null || val === undefined || isNaN(val)) return "0";
+  const num = Number(val);
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(2).replace(/\.00$/, "") + "M";
+  }
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+  }
+  return num.toLocaleString();
+}
+
 async function loadTrend() {
   try {
     const timeParams = getTimeRangeParams();
@@ -503,68 +515,158 @@ async function loadTrend() {
     let trendTitle = cfg.trendTitle;
     if (data.mode === "hourly") {
       if (currentTimeRange === "yesterday") {
-        trendTitle = "昨日逐小时用量分布";
+        trendTitle = "昨日逐小时用量走势与峰值";
       } else if (currentTimeRange === "today") {
-        trendTitle = "今日逐小时用量分布";
+        trendTitle = "今日逐小时用量走势与峰值";
       } else if (currentTimeRange === "custom") {
-        trendTitle = `逐小时用量分布 (${customStartDate})`;
+        trendTitle = `逐小时用量走势与峰值 (${customStartDate})`;
       } else {
-        trendTitle = "逐小时用量分布";
+        trendTitle = "逐小时用量走势与峰值";
       }
     } else if (currentTimeRange === "custom" && customStartDate && customEndDate) {
-      trendTitle = `用量趋势 (${customStartDate} ~ ${customEndDate})`;
+      trendTitle = `用量走势与峰值 (${customStartDate} ~ ${customEndDate})`;
     }
     if ($("trend-chart-title")) {
       $("trend-chart-title").textContent = trendTitle;
+    }
+
+    const rawLabels = data.labels || [];
+    const prompts = data.prompts || [];
+    const completions = data.completions || [];
+    const totals = (data.totals && data.totals.length === rawLabels.length)
+      ? data.totals
+      : rawLabels.map((_, i) => (prompts[i] || 0) + (completions[i] || 0));
+
+    const totalSum = totals.reduce((acc, v) => acc + (v || 0), 0);
+    const avgVal = rawLabels.length > 0 ? totalSum / rawLabels.length : 0;
+    const maxVal = totals.length > 0 ? Math.max(...totals, 0) : 0;
+    const peakIndex = totals.indexOf(maxVal);
+
+    // 更新右上角均值统计胶囊（如：日均 1.55M tokens / 时均 12.3K tokens）
+    const pill = $("trend-stat-pill");
+    if (pill) {
+      const avgLabel = data.mode === "hourly" ? "时均" : "日均";
+      pill.textContent = `${avgLabel} ${formatCompactTokens(avgVal)} tokens`;
     }
 
     if (trendLineChartInstance) {
       trendLineChartInstance.destroy();
     }
 
+    // 创建柔和渐变填充 (Gradient Area)
+    const gradient = ctx.createLinearGradient(0, 0, 0, (canvas.clientHeight || 260));
+    gradient.addColorStop(0, "rgba(59, 130, 246, 0.32)");
+    gradient.addColorStop(0.55, "rgba(59, 130, 246, 0.10)");
+    gradient.addColorStop(1, "rgba(59, 130, 246, 0.00)");
+
+    const todayStr = formatDate(new Date());
+
     trendLineChartInstance = new Chart(ctx, {
-      type: "bar",
+      type: "line",
       data: {
-        labels: data.labels || [],
+        labels: rawLabels,
         datasets: [
           {
-            label: "输入 Token (Prompt)",
-            data: data.prompts || [],
-            backgroundColor: "#3b82f6",
-            stack: "tokens",
-          },
-          {
-            label: "输出 Token (Completion)",
-            data: data.completions || [],
-            backgroundColor: "#10b981",
-            stack: "tokens",
+            label: "Token 总消耗",
+            data: totals,
+            borderColor: "#2563eb",
+            borderWidth: 2.5,
+            fill: true,
+            backgroundColor: gradient,
+            tension: 0.42,
+            cubicInterpolationMode: "monotone",
+            // 默认隐藏普通数据点，仅在峰值处展示高亮圆点
+            pointRadius: function (context) {
+              return (context.dataIndex === peakIndex && maxVal > 0) ? 4.5 : 0;
+            },
+            pointHoverRadius: 6,
+            pointBackgroundColor: "#ffffff",
+            pointBorderColor: "#2563eb",
+            pointBorderWidth: 2.5,
+            pointHoverBackgroundColor: "#ffffff",
+            pointHoverBorderColor: "#1d4ed8",
+            pointHoverBorderWidth: 3,
           },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        layout: {
+          padding: { top: 14, bottom: 4, left: 6, right: 14 },
+        },
         interaction: {
           mode: "index",
           intersect: false,
         },
         plugins: {
-          legend: { position: "top" },
+          legend: { display: false },
           tooltip: {
             mode: "index",
             intersect: false,
+            backgroundColor: "rgba(15, 23, 42, 0.94)",
+            titleColor: "#f8fafc",
+            bodyColor: "#cbd5e1",
+            borderColor: "rgba(255, 255, 255, 0.12)",
+            borderWidth: 1,
+            padding: 10,
+            cornerRadius: 8,
+            displayColors: false,
             callbacks: {
+              title: function (items) {
+                if (!items || !items.length) return "";
+                const idx = items[0].dataIndex;
+                const raw = rawLabels[idx] || "";
+                if (data.mode === "hourly") {
+                  return raw;
+                }
+                return raw === todayStr ? `${raw} (今日)` : raw;
+              },
               label: function (context) {
-                const label = context.dataset.label || "";
-                const val = context.parsed.y !== null ? formatNumber(context.parsed.y) : "0";
-                return `${label}: ${val}`;
+                const idx = context.dataIndex;
+                const tot = totals[idx] || 0;
+                const p = prompts[idx] || 0;
+                const c = completions[idx] || 0;
+                const lines = [];
+                if (idx === peakIndex && maxVal > 0) {
+                  lines.push("周期最高峰值");
+                }
+                lines.push(`总消耗: ${formatNumber(tot)} tokens`);
+                lines.push(`输入: ${formatNumber(p)} | 输出: ${formatNumber(c)}`);
+                return lines;
               },
             },
           },
         },
         scales: {
-          x: { stacked: true },
-          y: { stacked: true, beginAtZero: true },
+          x: {
+            grid: { display: false, drawBorder: false },
+            border: { display: false },
+            ticks: {
+              color: "#94a3b8",
+              font: { size: 11 },
+              maxTicksLimit: 6,
+              maxRotation: 0,
+              minRotation: 0,
+              autoSkip: true,
+              callback: function (val, index) {
+                const raw = this.getLabelForValue(val) || "";
+                if (data.mode === "hourly") {
+                  return raw.includes(" ") ? raw.split(" ")[1] : raw;
+                }
+                let shortDate = raw.length >= 10 ? raw.slice(5) : raw;
+                if (raw === todayStr || index === rawLabels.length - 1) {
+                  shortDate += " (今日)";
+                }
+                return shortDate;
+              },
+            },
+          },
+          y: {
+            display: false,
+            beginAtZero: true,
+            suggestedMax: maxVal > 0 ? maxVal * 1.18 : 100,
+          },
         },
       },
     });
