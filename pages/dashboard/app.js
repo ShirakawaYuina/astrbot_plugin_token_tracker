@@ -494,7 +494,7 @@ function formatCompactTokens(val) {
   if (val === null || val === undefined || isNaN(val)) return "0";
   const num = Number(val);
   if (num >= 1000000) {
-    return (num / 1000000).toFixed(2).replace(/\.00$/, "") + "M";
+    return (num / 1000000).toFixed(2).replace(/\.00$/, "").replace(/(\.[0-9])0$/, "$1") + "M";
   }
   if (num >= 1000) {
     return (num / 1000).toFixed(1).replace(/\.0$/, "") + "K";
@@ -553,12 +553,6 @@ async function loadTrend() {
       trendLineChartInstance.destroy();
     }
 
-    // 创建柔和渐变填充 (Gradient Area)
-    const gradient = ctx.createLinearGradient(0, 0, 0, (canvas.clientHeight || 260));
-    gradient.addColorStop(0, "rgba(59, 130, 246, 0.32)");
-    gradient.addColorStop(0.55, "rgba(59, 130, 246, 0.10)");
-    gradient.addColorStop(1, "rgba(59, 130, 246, 0.00)");
-
     const todayStr = formatDate(new Date());
 
     trendLineChartInstance = new Chart(ctx, {
@@ -571,8 +565,21 @@ async function loadTrend() {
             data: totals,
             borderColor: "#2563eb",
             borderWidth: 2.5,
-            fill: true,
-            backgroundColor: gradient,
+            fill: "start",
+            // 曲线下方动态垂直渐变色：顶部深蓝 -> 中部过渡 -> 底部基线颜色完全消失
+            backgroundColor: function (context) {
+              const chart = context.chart;
+              const { ctx: chartCtx, chartArea } = chart;
+              if (!chartArea) {
+                return "rgba(37, 99, 235, 0.15)";
+              }
+              const g = chartCtx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+              g.addColorStop(0, "rgba(37, 99, 235, 0.55)");    // 曲线紧贴处深蓝
+              g.addColorStop(0.35, "rgba(59, 130, 246, 0.30)"); // 中部过度
+              g.addColorStop(0.75, "rgba(59, 130, 246, 0.10)"); // 下部渐淡
+              g.addColorStop(1, "rgba(59, 130, 246, 0.00)");    // 底部基线完全透明消失
+              return g;
+            },
             tension: 0.42,
             cubicInterpolationMode: "monotone",
             // 默认隐藏普通数据点，仅在峰值处展示高亮圆点
@@ -663,9 +670,26 @@ async function loadTrend() {
             },
           },
           y: {
-            display: false,
+            display: true,
             beginAtZero: true,
-            suggestedMax: maxVal > 0 ? maxVal * 1.18 : 100,
+            suggestedMax: maxVal > 0 ? maxVal * 1.15 : 100,
+            border: { display: false },
+            grid: {
+              display: true,
+              color: "rgba(148, 163, 184, 0.16)",
+              borderDash: [4, 4],
+              drawTicks: true,
+              tickLength: 4,
+            },
+            ticks: {
+              color: "#94a3b8",
+              font: { size: 10.5 },
+              maxTicksLimit: 5,
+              padding: 6,
+              callback: function (val) {
+                return formatCompactTokens(val);
+              },
+            },
           },
         },
       },
