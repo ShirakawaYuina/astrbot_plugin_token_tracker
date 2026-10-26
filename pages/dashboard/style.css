@@ -974,9 +974,10 @@ body.dashboard-body {
   background: rgba(148, 163, 184, 0.16);
   padding: 1px 6px;
   border-radius: 4px;
-  min-width: 26px;
+  width: 28px;
   text-align: center;
   flex-shrink: 0;
+  margin-right: 12px;
 }
 
 .row-rank.rank-top {
@@ -990,8 +991,10 @@ body.dashboard-body {
   width: 65px;
   flex-shrink: 0;
   font-feature-settings: "tnum";
+  margin-right: 10px;
 }
 
+/* Tab 4 模型列：固定宽 220px，绝不挤压右侧调用方列，超长模型优雅省略 */
 .model-chip {
   display: flex;
   align-items: center;
@@ -999,10 +1002,13 @@ body.dashboard-body {
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--text-main);
-  min-width: 170px;
+  width: 220px;
+  flex-shrink: 0;
+  margin-right: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .model-chip .dot {
@@ -1010,6 +1016,21 @@ body.dashboard-body {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.model-chip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tab 4 调用方整列：向左对齐，与模型列保持舒适间距，不紧贴 */
+.caller-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .caller-chip {
@@ -1026,14 +1047,44 @@ body.dashboard-body {
   max-width: 180px;
 }
 
+/* 调用次数独立列：左对齐，固定宽 120px */
+.calls-col {
+  width: 120px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-right: 12px;
+}
+
 .calls-badge {
   font-size: 0.72rem;
   color: var(--text-muted);
   background: var(--surface-variant);
-  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  padding: 2px 8px;
   border-radius: 4px;
   font-weight: 500;
   white-space: nowrap;
+  font-feature-settings: "tnum";
+}
+
+/* Tab 3 插件调用排行调用方实体列：固定宽 240px，包含徽标与类型标签 */
+.caller-entity-col {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 16px;
+  min-width: 0;
+}
+
+.caller-entity-col .model-chip {
+  width: auto;
+  max-width: 175px;
+  margin-right: 0;
+  flex: 0 1 auto;
 }
 
 /* Mode & Estimate Tags */

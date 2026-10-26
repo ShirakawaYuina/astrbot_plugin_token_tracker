@@ -389,7 +389,9 @@ async function loadModelsAndCallers() {
                   <span class="dot" style="background: ${color};"></span>
                   <span>${m.model}</span>
                 </div>
-                <span class="calls-badge">${formatNumber(m.call_count)} 次调用</span>
+                <div class="calls-col">
+                  <span class="calls-badge">${formatNumber(m.call_count)} 次调用</span>
+                </div>
               </div>
               <div class="row-right">
                 <span class="row-tokens">${formatNumber(m.total_tokens)} <span class="row-tokens-unit">tokens</span></span>
@@ -432,12 +434,16 @@ async function loadModelsAndCallers() {
             <div class="compact-row" title="${c.caller_name}&#10;类型: ${c.caller_type}&#10;总用量: ${formatNumber(c.total_tokens)} tokens (${pct}%)&#10;输入: ${formatNumber(c.prompt_tokens)}&#10;输出: ${formatNumber(c.completion_tokens)}&#10;调用次数: ${formatNumber(c.call_count)}">
               <div class="row-left">
                 <span class="row-rank ${isTop ? 'rank-top' : ''}">#${idx + 1}</span>
-                <div class="model-chip" title="${c.caller_name}">
-                  <span class="dot" style="background: ${color};"></span>
-                  <span>${c.caller_name}</span>
+                <div class="caller-entity-col">
+                  <div class="model-chip" title="${c.caller_name}">
+                    <span class="dot" style="background: ${color};"></span>
+                    <span>${c.caller_name}</span>
+                  </div>
+                  <span class="${isPlugin ? 'tag-plugin' : 'tag-chat'}">${isPlugin ? '插件' : '核心对话'}</span>
                 </div>
-                <span class="${isPlugin ? 'tag-plugin' : 'tag-chat'}">${isPlugin ? '插件' : '核心对话'}</span>
-                <span class="calls-badge">${formatNumber(c.call_count)} 次调用</span>
+                <div class="calls-col">
+                  <span class="calls-badge">${formatNumber(c.call_count)} 次调用</span>
+                </div>
               </div>
               <div class="row-right">
                 <span class="row-tokens">${formatNumber(c.total_tokens)} <span class="row-tokens-unit">tokens</span></span>
@@ -805,10 +811,12 @@ async function loadRecords(page = 1) {
               <span class="dot" style="background: ${color};"></span>
               <span>${r.model}</span>
             </div>
-            <span class="caller-chip" title="${r.caller_name}">${r.caller_name}</span>
-            <div class="tags-group">
-              ${modeTag}
-              ${estTag}
+            <div class="caller-col">
+              <span class="caller-chip" title="${r.caller_name}">${r.caller_name}</span>
+              <div class="tags-group">
+                ${modeTag}
+                ${estTag}
+              </div>
             </div>
           </div>
           <div class="row-right">
