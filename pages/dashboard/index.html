@@ -21,7 +21,7 @@
         </div>
         <div class="title-row">
           <h1 class="header-title">Token 用量看板</h1>
-          <span class="version-chip">v1.0.10</span>
+          <span class="version-chip">v1.0.11</span>
           <span class="live-status-chip">
             <span class="live-dot"></span>
             <span>实时监控中</span>
@@ -184,23 +184,10 @@
             <svg class="v-icon v-icon-stroke" width="16" height="16" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
             <span>模型聚合统计列表</span>
           </h3>
+          <span class="trend-badge-pill" id="models-total-pill">共 - 个模型</span>
         </div>
-        <div class="table-responsive">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>模型名称</th>
-                <th>输入 Tokens</th>
-                <th>输出 Tokens</th>
-                <th>总 Tokens</th>
-                <th>调用次数</th>
-                <th>占比</th>
-              </tr>
-            </thead>
-            <tbody id="models-table-body-full">
-              <!-- Replicated in script -->
-            </tbody>
-          </table>
+        <div class="compact-list" id="models-compact-list">
+          <div class="empty-compact-state"><span>加载中...</span></div>
         </div>
       </div>
     </div>
@@ -213,23 +200,10 @@
             <svg class="v-icon v-icon-stroke" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17a3 3 0 0 0 6 0v-3h-3a3 3 0 0 0 0 6z"/></svg>
             <span>调用来源 / 插件全量统计</span>
           </h3>
+          <span class="trend-badge-pill" id="callers-total-pill">共 - 个来源</span>
         </div>
-        <div class="table-responsive">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>来源名称</th>
-                <th>类型</th>
-                <th>输入 Tokens</th>
-                <th>输出 Tokens</th>
-                <th>总 Tokens</th>
-                <th>调用次数</th>
-              </tr>
-            </thead>
-            <tbody id="callers-table-body-full">
-              <!-- Replicated in script -->
-            </tbody>
-          </table>
+        <div class="compact-list" id="callers-compact-list">
+          <div class="empty-compact-state"><span>加载中...</span></div>
         </div>
       </div>
     </div>
@@ -252,26 +226,8 @@
           </div>
         </div>
 
-        <div class="table-responsive">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>时间</th>
-                <th>模型</th>
-                <th>来源</th>
-                <th>输入</th>
-                <th>输出</th>
-                <th>缓存</th>
-                <th>总计</th>
-                <th>耗时</th>
-                <th>模式</th>
-              </tr>
-            </thead>
-            <tbody id="records-table-body">
-              <tr><td colspan="10" class="text-center">加载中...</td></tr>
-            </tbody>
-          </table>
+        <div class="compact-list" id="records-compact-list">
+          <div class="empty-compact-state"><span>加载中...</span></div>
         </div>
 
         <div class="pagination-bar">

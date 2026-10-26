@@ -361,74 +361,98 @@ async function loadModelsAndCallers() {
           `;
         }).join("");
       }
+    }    // 渲染模型全量列表（Tab 2 - 极简单行流）
+    const modelsContainer = $("models-compact-list") || $("models-table-body-full");
+    const modelsTotalPill = $("models-total-pill");
+    if (modelsTotalPill) {
+      modelsTotalPill.textContent = `共 ${models.length} 个模型`;
     }
-
-    // 渲染模型全量排行表（Tab 2）
-    const fullModelsTbody = $("models-table-body-full");
-    if (fullModelsTbody) {
+    if (modelsContainer) {
       if (models.length === 0) {
-        fullModelsTbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无模型调用记录</td></tr>';
+        modelsContainer.innerHTML = `
+          <div class="empty-compact-state">
+            <span>所选时段暂无模型调用记录</span>
+          </div>
+        `;
       } else {
-        fullModelsTbody.innerHTML = models.map((m) => {
-          const pct = ((m.total_tokens / periodTokens) * 100).toFixed(1);
+        const colors = ["#2563eb", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#64748b"];
+        modelsContainer.innerHTML = models.map((m, idx) => {
+          const pct = periodTokens > 0 ? ((m.total_tokens / periodTokens) * 100).toFixed(1) : "0.0";
+          const color = colors[idx % colors.length];
+          const isTop = idx === 0;
+
           return `
-            <tr>
-              <td><strong>${m.model}</strong></td>
-              <td>${formatNumber(m.prompt_tokens)}</td>
-              <td>${formatNumber(m.completion_tokens)}</td>
-              <td>${formatNumber(m.total_tokens)}</td>
-              <td>${formatNumber(m.call_count)}</td>
-              <td><span class="badge badge-blue">${pct}%</span></td>
-            </tr>
+            <div class="compact-row" title="${m.model}&#10;总用量: ${formatNumber(m.total_tokens)} tokens (${pct}%)&#10;输入: ${formatNumber(m.prompt_tokens)}&#10;输出: ${formatNumber(m.completion_tokens)}&#10;缓存: ${formatNumber(m.cached_tokens)}&#10;调用次数: ${formatNumber(m.call_count)}">
+              <div class="row-left">
+                <span class="row-rank ${isTop ? 'rank-top' : ''}">#${idx + 1}</span>
+                <div class="model-chip" title="${m.model}">
+                  <span class="dot" style="background: ${color};"></span>
+                  <span>${m.model}</span>
+                </div>
+                <span class="calls-badge">${formatNumber(m.call_count)} 次调用</span>
+              </div>
+              <div class="row-right">
+                <span class="row-tokens">${formatNumber(m.total_tokens)} <span class="row-tokens-unit">tokens</span></span>
+                <div class="row-io-split">
+                  <span class="split-p" title="输入 Token">入 ${formatNumber(m.prompt_tokens)}</span>
+                  <span class="split-c" title="输出 Token">出 ${formatNumber(m.completion_tokens)}</span>
+                  <span class="split-cached ${m.cached_tokens > 0 ? 'hit' : ''}" title="缓存 Token">缓 ${formatNumber(m.cached_tokens || 0)}</span>
+                </div>
+                <span class="row-pct-pill">${pct}%</span>
+              </div>
+            </div>
           `;
         }).join("");
       }
     }
 
-    // 渲染来源全量排行表（Tab 3）
-    const fullCallersTbody = $("callers-table-body-full");
-    if (fullCallersTbody) {
-      if (callers.length === 0) {
-        fullCallersTbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无来源调用记录</td></tr>';
-      } else {
-        fullCallersTbody.innerHTML = callers.map((c) => {
-          const typeBadge = c.caller_type === "plugin" ? "badge-purple" : "badge-gray";
-          return `
-            <tr>
-              <td><strong>${c.caller_name}</strong></td>
-              <td><span class="badge ${typeBadge}">${c.caller_type}</span></td>
-              <td>${formatNumber(c.prompt_tokens)}</td>
-              <td>${formatNumber(c.completion_tokens)}</td>
-              <td>${formatNumber(c.total_tokens)}</td>
-              <td>${formatNumber(c.call_count)}</td>
-            </tr>
-          `;
-        }).join("");
-      }
+    // 渲染来源全量列表（Tab 3 - 极简单行流）
+    const callersContainer = $("callers-compact-list") || $("callers-table-body-full");
+    const callersTotalPill = $("callers-total-pill");
+    const totalCallerTokens = callers.reduce((acc, c) => acc + (c.total_tokens || 0), 0);
+    if (callersTotalPill) {
+      callersTotalPill.textContent = `共 ${callers.length} 个来源`;
     }
+    if (callersContainer) {
+      if (callers.length === 0) {
+        callersContainer.innerHTML = `
+          <div class="empty-compact-state">
+            <span>所选时段暂无来源调用记录</span>
+          </div>
+        `;
+      } else {
+        const colors = ["#8b5cf6", "#2563eb", "#10b981", "#f59e0b", "#ec4899", "#64748b"];
+        callersContainer.innerHTML = callers.map((c, idx) => {
+          const pct = totalCallerTokens > 0 ? ((c.total_tokens / totalCallerTokens) * 100).toFixed(1) : "0.0";
+          const color = colors[idx % colors.length];
+          const isTop = idx === 0;
+          const isPlugin = c.caller_type === "plugin";
 
-    // 渲染来源排行表 (概览页已精简，若存在则更新)
-    const callersTbody = $("callers-table-body");
-    if (callersTbody) {
-      if (callers.length === 0) {
-        callersTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 24px;">所选时段暂无来源调用记录</td></tr>`;
-      } else {
-        callersTbody.innerHTML = callers.slice(0, 10).map((c) => {
-          const typeBadge = c.caller_type === "plugin" ? "badge-purple" : "badge-gray";
           return `
-            <tr>
-              <td><strong>${c.caller_name}</strong></td>
-              <td><span class="badge ${typeBadge}">${c.caller_type}</span></td>
-              <td>${formatNumber(c.prompt_tokens)}</td>
-              <td>${formatNumber(c.completion_tokens)}</td>
-              <td>${formatNumber(c.total_tokens)}</td>
-              <td>${formatNumber(c.call_count)}</td>
-            </tr>
+            <div class="compact-row" title="${c.caller_name}&#10;类型: ${c.caller_type}&#10;总用量: ${formatNumber(c.total_tokens)} tokens (${pct}%)&#10;输入: ${formatNumber(c.prompt_tokens)}&#10;输出: ${formatNumber(c.completion_tokens)}&#10;调用次数: ${formatNumber(c.call_count)}">
+              <div class="row-left">
+                <span class="row-rank ${isTop ? 'rank-top' : ''}">#${idx + 1}</span>
+                <div class="model-chip" title="${c.caller_name}">
+                  <span class="dot" style="background: ${color};"></span>
+                  <span>${c.caller_name}</span>
+                </div>
+                <span class="${isPlugin ? 'tag-plugin' : 'tag-chat'}">${isPlugin ? '插件' : '核心对话'}</span>
+                <span class="calls-badge">${formatNumber(c.call_count)} 次调用</span>
+              </div>
+              <div class="row-right">
+                <span class="row-tokens">${formatNumber(c.total_tokens)} <span class="row-tokens-unit">tokens</span></span>
+                <div class="row-io-split">
+                  <span class="split-p" title="输入 Token">入 ${formatNumber(c.prompt_tokens)}</span>
+                  <span class="split-c" title="输出 Token">出 ${formatNumber(c.completion_tokens)}</span>
+                  <span class="split-cached ${c.cached_tokens > 0 ? 'hit' : ''}" title="缓存 Token">缓 ${formatNumber(c.cached_tokens || 0)}</span>
+                </div>
+                <span class="row-pct-pill">${pct}%</span>
+              </div>
+            </div>
           `;
         }).join("");
       }
-    }
-  } catch (err) {
+    }} catch (err) {
     console.error("Failed to load models/callers:", err);
     if ($("models-table-body")) $("models-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
     if ($("callers-table-body")) $("callers-table-body").innerHTML = `<tr><td colspan="6" class="text-center">加载失败</td></tr>`;
@@ -735,42 +759,80 @@ async function loadRecords(page = 1) {
     $("btn-prev").disabled = currentPage <= 1;
     $("btn-next").disabled = currentPage >= currentTotalPages;
 
-    const tbody = $("records-table-body");
+    const container = $("records-compact-list") || $("records-table-body");
+    if (!container) return;
+
     if (items.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="text-center" style="color: var(--text-muted); padding: 24px;">暂无调用明细记录</td></tr>`;
+      container.innerHTML = `
+        <div class="empty-compact-state">
+          <span>暂无明细流水记录</span>
+        </div>
+      `;
       return;
     }
 
-    tbody.innerHTML = items.map((r) => {
-      let modeBadge = r.is_streaming ? '<span class="badge badge-blue">流式</span>' : '<span class="badge badge-gray">常规</span>';
+    const colors = ["#2563eb", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#64748b"];
+
+    container.innerHTML = items.map((r, idx) => {
+      const isStreaming = r.is_streaming;
+      const isEstimated = r.is_estimated;
       const mLower = String(r.model || "").toLowerCase();
       const pLower = String(r.provider_id || "").toLowerCase();
       const cLower = String(r.caller_name || "").toLowerCase();
-      const isEmbed = r.caller_type === "embedding" || (!r.is_streaming && r.completion_tokens === 0 && (
+      const isEmbed = r.caller_type === "embedding" || (!isStreaming && r.completion_tokens === 0 && (
         mLower.includes("embed") || pLower.includes("embed") || cLower.includes("livingmemory") || cLower.includes("kb")
       ));
-      if (isEmbed) {
-        modeBadge = '<span class="badge badge-purple">嵌入</span>';
+
+      let modeTag = isEmbed ? '<span class="tag-embed">嵌入</span>' : (isStreaming ? '<span class="tag-stream">流式</span>' : '<span class="tag-stream">常规</span>');
+      let estTag = isEstimated ? '<span class="tag-est">估算</span>' : '';
+
+      const durSec = (r.duration_ms || 0) / 1000;
+      const isSlow = durSec > 10.0;
+      const color = colors[idx % colors.length];
+
+      // 提取纯时分秒，提高紧凑可读性
+      let timeStr = r.datetime_str || "";
+      if (timeStr.includes(" ")) {
+        timeStr = timeStr.split(" ")[1];
       }
-      const estBadge = r.is_estimated ? '<span class="badge badge-orange">估算</span>' : "";
+
       return `
-        <tr>
-          <td>${r.id}</td>
-          <td>${r.datetime_str}</td>
-          <td><strong>${r.model}</strong></td>
-          <td>${r.caller_name}</td>
-          <td>${formatNumber(r.prompt_tokens)}</td>
-          <td>${formatNumber(r.completion_tokens)}</td>
-          <td>${formatNumber(r.cached_tokens)}</td>
-          <td><strong>${formatNumber(r.total_tokens)}</strong></td>
-          <td>${((r.duration_ms || 0) / 1000).toFixed(2)} s</td>
-          <td>${modeBadge} ${estBadge}</td>
-        </tr>
+        <div class="compact-row" title="${r.model}&#10;来源: ${r.caller_name}&#10;完整时戳: ${r.datetime_str}&#10;总用量: ${formatNumber(r.total_tokens)} tokens&#10;输入 (Prompt): ${formatNumber(r.prompt_tokens)}&#10;输出 (Completion): ${formatNumber(r.completion_tokens)}&#10;缓存 (Cached): ${formatNumber(r.cached_tokens)}&#10;耗时: ${durSec.toFixed(2)}s">
+          <div class="row-left">
+            <span class="row-id">#${r.id}</span>
+            <span class="row-time">${timeStr}</span>
+            <div class="model-chip" title="${r.model}">
+              <span class="dot" style="background: ${color};"></span>
+              <span>${r.model}</span>
+            </div>
+            <span class="caller-chip" title="${r.caller_name}">${r.caller_name}</span>
+            <div class="tags-group">
+              ${modeTag}
+              ${estTag}
+            </div>
+          </div>
+          <div class="row-right">
+            <span class="row-tokens">${formatNumber(r.total_tokens)} <span class="row-tokens-unit">tokens</span></span>
+            <div class="row-io-split">
+              <span class="split-p" title="输入 Token">入 ${formatNumber(r.prompt_tokens)}</span>
+              <span class="split-c" title="输出 Token">出 ${formatNumber(r.completion_tokens)}</span>
+              <span class="split-cached ${r.cached_tokens > 0 ? 'hit' : ''}" title="缓存 Token">缓 ${formatNumber(r.cached_tokens || 0)}</span>
+            </div>
+            <span class="row-lat-pill ${isSlow ? 'lat-slow' : 'lat-normal'}">${durSec.toFixed(2)}s</span>
+          </div>
+        </div>
       `;
     }).join("");
   } catch (err) {
     console.error("Failed to load records:", err);
-    $("records-table-body").innerHTML = `<tr><td colspan="10" class="text-center">加载明细失败</td></tr>`;
+    const container = $("records-compact-list") || $("records-table-body");
+    if (container) {
+      container.innerHTML = `
+        <div class="empty-compact-state">
+          <span style="color: #ef4444;">加载明细记录失败</span>
+        </div>
+      `;
+    }
   }
 }
 
