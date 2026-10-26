@@ -432,62 +432,75 @@ async function loadModelsAndCallers() {
 }
 
 function renderModelPieChart(models) {
-  const canvas = $("modelPieChart");
-  if (!canvas || typeof Chart === "undefined") return;
-  const ctx = canvas.getContext("2d");
+  const container = $("modelWidgetGrid");
+  if (!container) return;
 
+  const statPill = $("model-stat-pill");
+  const grandTotal = models.reduce((acc, m) => acc + (m.total_tokens || 0), 0);
   const topModels = models.slice(0, 6);
-  const labels = topModels.map((m) => m.model);
-  const data = topModels.map((m) => m.total_tokens);
 
-  const colors = [
-    "#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#64748b"
-  ];
-
-  if (modelPieChartInstance) {
-    modelPieChartInstance.destroy();
+  if (statPill) {
+    statPill.textContent = topModels.length > 0 ? `${topModels.length} 个活跃模型` : "暂无活跃模型";
   }
 
-  const hasData = topModels.length > 0 && topModels.some(m => m.total_tokens > 0);
+  if (topModels.length === 0 || grandTotal === 0) {
+    container.innerHTML = `
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 240px; color: var(--text-muted); font-size: 0.85rem;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5; margin-bottom: 8px;">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>所选时段暂无模型调用数据</span>
+      </div>
+    `;
+    return;
+  }
 
-  modelPieChartInstance = new Chart(ctx, {
-    type: "doughnut",
-    data: {
-      labels: hasData ? labels : ["暂无消耗"],
-      datasets: [{
-        data: hasData ? data : [1],
-        backgroundColor: hasData ? colors : ["#cbd5e1"],
-        borderWidth: 2,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "right" },
-        tooltip: {
-          callbacks: {
-            title: function (tooltipItems) {
-              if (!hasData || !tooltipItems || tooltipItems.length === 0) return "";
-              const idx = tooltipItems[0].dataIndex;
-              return topModels[idx]?.model || tooltipItems[0].label || "";
-            },
-            label: function (context) {
-              if (!hasData) return "暂无消耗";
-              const idx = context.dataIndex;
-              const m = topModels[idx];
-              if (!m) return "";
-              return [
-                `输入 Token (Prompt): ${formatNumber(m.prompt_tokens)}`,
-                `输出 Token (Completion): ${formatNumber(m.completion_tokens)}`,
-              ];
-            },
-          },
-        },
-      },
-      cutout: "60%",
-    },
-  });
+  const colors = [
+    "#2563eb", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#64748b"
+  ];
+
+  // SVG 独立微环进度参数 (r = 18, 周长 ≈ 113.1)
+  const circumference = 2 * Math.PI * 18;
+
+  const cardsHtml = topModels.map((m, idx) => {
+    const pct = grandTotal > 0 ? ((m.total_tokens / grandTotal) * 100).toFixed(1) : "0.0";
+    const numPct = parseFloat(pct);
+    const strokeDash = (numPct / 100) * circumference;
+    const strokeOffset = Math.max(0, circumference - strokeDash);
+    const color = colors[idx % colors.length];
+    const isTop = idx === 0;
+
+    return `
+      <div class="widget-card" title="${m.model}&#10;总消耗: ${formatNumber(m.total_tokens)} tokens (${pct}%)&#10;输入 (Prompt): ${formatNumber(m.prompt_tokens)}&#10;输出 (Completion): ${formatNumber(m.completion_tokens)}&#10;调用次数: ${formatNumber(m.call_count)}">
+        <div class="progress-circle-wrap">
+          <svg viewBox="0 0 44 44">
+            <circle class="circle-bg" cx="22" cy="22" r="18" />
+            <circle class="circle-fill" cx="22" cy="22" r="18"
+              stroke="${color}"
+              stroke-dasharray="${circumference.toFixed(1)}"
+              stroke-dashoffset="${strokeOffset.toFixed(1)}" />
+          </svg>
+          <div class="circle-pct-text">${Math.round(numPct)}%</div>
+        </div>
+        <div class="widget-info">
+          <div class="widget-top-line">
+            <span class="widget-name">${m.model}</span>
+            <span class="widget-rank ${isTop ? 'rank-top' : ''}">#${idx + 1}</span>
+          </div>
+          <div class="widget-val-line">
+            <span class="widget-val">${formatCompactTokens(m.total_tokens)} <span class="widget-unit">tokens</span></span>
+            <span class="widget-calls">${formatNumber(m.call_count)} 次</span>
+          </div>
+          <div class="widget-sub-line">
+            <span class="tag-io-p" title="输入 Token">入 ${formatCompactTokens(m.prompt_tokens)}</span>
+            <span class="tag-io-c" title="输出 Token">出 ${formatCompactTokens(m.completion_tokens)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  container.innerHTML = `<div class="widget-grid">${cardsHtml}</div>`;
 }
 
 function formatCompactTokens(val) {
