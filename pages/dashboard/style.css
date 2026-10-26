@@ -994,7 +994,7 @@ body.dashboard-body {
   margin-right: 10px;
 }
 
-/* Tab 4 模型列：固定宽 220px，绝不挤压右侧调用方列，超长模型优雅省略 */
+/* Tab 4 模型列：放宽至 300px，展示模型完整全名，绝不截断 */
 .model-chip {
   display: flex;
   align-items: center;
@@ -1002,12 +1002,10 @@ body.dashboard-body {
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--text-main);
-  width: 220px;
+  width: 300px;
   flex-shrink: 0;
-  margin-right: 16px;
+  margin-right: 20px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 
@@ -1019,8 +1017,6 @@ body.dashboard-body {
 }
 
 .model-chip span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1033,6 +1029,7 @@ body.dashboard-body {
   min-width: 0;
 }
 
+/* 插件与调用方徽标：展示完整全名，不强制截断 */
 .caller-chip {
   font-size: 0.72rem;
   color: var(--text-muted);
@@ -1042,9 +1039,31 @@ body.dashboard-body {
   border-radius: 4px;
   font-weight: 500;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px;
+}
+
+/* Tab 2 模型聚合列表：模型全名列宽 330px，间距加宽让调用次数向右移 */
+#models-compact-list .model-chip {
+  width: 330px;
+  margin-right: 48px;
+}
+
+/* Tab 3 插件调用排行调用方实体列：宽度 330px，完整展示插件全名与类型标签，间距加宽让调用次数向右移 */
+.caller-entity-col {
+  width: 330px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 48px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.caller-entity-col .model-chip {
+  width: auto;
+  margin-right: 0;
+  flex: 0 1 auto;
+  white-space: nowrap;
 }
 
 /* 调用次数独立列：左对齐，固定宽 120px */
@@ -1054,7 +1073,7 @@ body.dashboard-body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  margin-right: 12px;
+  margin-right: 16px;
 }
 
 .calls-badge {
@@ -1067,24 +1086,6 @@ body.dashboard-body {
   font-weight: 500;
   white-space: nowrap;
   font-feature-settings: "tnum";
-}
-
-/* Tab 3 插件调用排行调用方实体列：固定宽 240px，包含徽标与类型标签 */
-.caller-entity-col {
-  width: 240px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-right: 16px;
-  min-width: 0;
-}
-
-.caller-entity-col .model-chip {
-  width: auto;
-  max-width: 175px;
-  margin-right: 0;
-  flex: 0 1 auto;
 }
 
 /* Mode & Estimate Tags */
