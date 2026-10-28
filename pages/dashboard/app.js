@@ -9,7 +9,7 @@ let trendLineChartInstance = null;
 let currentPage = 1;
 let currentTotalPages = 1;
 
-let currentTimeRange = "all"; // 'all', 'today', 'yesterday', '7d', '30d', 'this_month', 'custom'
+let currentTimeRange = "today"; // 'all', 'today', 'yesterday', '7d', '30d', 'this_month', 'custom'
 let customStartDate = "";
 let customEndDate = "";
 

@@ -1150,17 +1150,23 @@ body.dashboard-body {
 .row-right {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   flex-shrink: 0;
   font-feature-settings: "tnum";
 }
 
+/* Token 总量字段：固定宽 140px，上下行严格中心对齐 */
 .row-tokens {
   font-size: 0.86rem;
   font-weight: 800;
   color: var(--text-main);
-  min-width: 75px;
-  text-align: right;
+  width: 140px;
+  flex-shrink: 0;
+  text-align: center;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
 }
 
 .row-tokens-unit {
@@ -1169,13 +1175,15 @@ body.dashboard-body {
   color: var(--text-muted);
 }
 
+/* Token 入/出/缓明细：固定宽 250px，严格左侧对齐垂直线 */
 .row-io-split {
   font-size: 0.72rem;
   color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 195px;
+  width: 250px;
+  flex-shrink: 0;
 }
 
 .split-p { color: #2563eb; font-weight: 600; }
@@ -1194,8 +1202,9 @@ body.dashboard-body {
   font-weight: 700;
   padding: 2px 8px;
   border-radius: 12px;
-  min-width: 60px;
+  width: 56px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .lat-normal { background: #f0fdf4; color: #16a34a; }
@@ -1208,8 +1217,9 @@ body.dashboard-body {
   border-radius: 6px;
   background: #eff6ff;
   color: #2563eb;
-  min-width: 52px;
+  width: 56px;
   text-align: right;
+  flex-shrink: 0;
 }
 
 .empty-compact-state {
