@@ -92,7 +92,7 @@ def _identify_caller(offset: int = 2) -> tuple[str, str]:
         has_kb = False
         has_core = False
 
-        for frame_info in stack[offset:35]:
+        for frame_info in stack[offset:55]:
             fn = frame_info.filename.replace("\\", "/")
 
             # 尝试从 data/plugins/<plugin_dir>/ 路径中提取插件名
@@ -1108,6 +1108,36 @@ def install_interceptor(store: TrackerStore, get_cfg: Any) -> None:
                 return patched_get_embeddings
 
             cls.get_embeddings = _make_embeddings_wrapper(orig_ges)
+
+        # Patch get_embeddings_batch (分批并发向量化调度器，透传发起方上下文至内部并发任务)
+        if "get_embeddings_batch" in cls.__dict__:
+            orig_geb = cls.__dict__["get_embeddings_batch"]
+            _PATCHED_METHODS[(cls, "get_embeddings_batch")] = orig_geb
+
+            def _make_embeddings_batch_wrapper(original_fn: Any):
+                @functools.wraps(original_fn)
+                def patched_get_embeddings_batch(
+                    self: Any, *args: Any, **kwargs: Any
+                ) -> Any:
+                    caller = _CURRENT_CALLER.get() or _identify_caller(offset=2)
+
+                    async def _coro_runner():
+                        tok_caller = _CURRENT_CALLER.set(caller)
+                        try:
+                            res = original_fn(self, *args, **kwargs)
+                            if inspect.isawaitable(res):
+                                return await res
+                            return res
+                        finally:
+                            _CURRENT_CALLER.reset(tok_caller)
+
+                    return _coro_runner()
+
+                if hasattr(inspect, "markcoroutinefunction"):
+                    inspect.markcoroutinefunction(patched_get_embeddings_batch)
+                return patched_get_embeddings_batch
+
+            cls.get_embeddings_batch = _make_embeddings_batch_wrapper(orig_geb)
 
     # 7. 对生图插件 OpenAIImageGateway 安装 AOP 拦截器
     ensure_image_gateway_interceptor(store, get_cfg)

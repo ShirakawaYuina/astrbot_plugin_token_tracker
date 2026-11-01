@@ -701,4 +701,57 @@ async def test_embedding_interception_livingmemory_create_task():
         uninstall_interceptor()
 
 
+@pytest.mark.asyncio
+async def test_embedding_interception_get_embeddings_batch_propagation():
+    """测试 get_embeddings_batch 在 asyncio.gather 并发批处理下的调用者上下文透传"""
+    from astrbot.core.provider.provider import EmbeddingProvider
+
+    class MockBatchEmbeddingProvider(EmbeddingProvider):
+        def __init__(self):
+            self.model = "gemini-embedding-2"
+            self.provider_config = {"id": "gemini_emb_provider", "embedding_model": "gemini-embedding-2"}
+
+        def get_dim(self):
+            return 768
+
+        async def get_embedding(self, text: str) -> list[float]:
+            return [0.1] * 768
+
+        async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1] * 768] * len(texts)
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+
+    cfg = PluginConfig()
+    uninstall_interceptor()
+    try:
+        install_interceptor(mock_store, lambda: cfg)
+
+        inst = MockBatchEmbeddingProvider()
+
+        # 模拟外部来自插件文件路径的调用栈，验证 get_embeddings_batch 入口栈探测与内部 gather 并发任务的上下文透传
+        fake_filename = "data/plugins/astrbot_plugin_livingmemory/retrieval.py"
+        code_str = """
+async def fake_caller(provider):
+    return await provider.get_embeddings_batch(["memory block 1", "memory block 2"])
+"""
+        code_obj = compile(code_str, fake_filename, "exec")
+        ns = {}
+        exec(code_obj, ns)
+        fake_caller = ns["fake_caller"]
+
+        res = await fake_caller(inst)
+        assert len(res) == 2
+
+        await asyncio.sleep(0.05)
+        assert mock_store.record_usage.called
+        for call in mock_store.record_usage.call_args_list:
+            assert call.kwargs["caller_type"] == "plugin"
+            assert call.kwargs["caller_name"] == "astrbot_plugin_livingmemory"
+            assert call.kwargs["model"] == "gemini-embedding-2"
+    finally:
+        uninstall_interceptor()
+
+
 
