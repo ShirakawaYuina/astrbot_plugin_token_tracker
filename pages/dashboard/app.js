@@ -249,7 +249,17 @@ async function loadOverview() {
       $("kpi-today-sub").textContent = `输入: ${formatNumber(todayPrompt)}${cacheNote} | 输出: ${formatNumber(todayCompletion)}`;
 
       $("kpi-today-calls").textContent = formatNumber(data.today_calls || 0);
-      $("kpi-today-avg-time").textContent = `平均耗时: ${((data.today_avg_duration_ms || data.avg_duration_ms || 0) / 1000).toFixed(2)} s`;
+      const avgDur = ((data.today_avg_duration_ms || data.avg_duration_ms || 0) / 1000).toFixed(2);
+      const avgFirst = data.today_avg_first_token_ms ? (data.today_avg_first_token_ms / 1000).toFixed(2) : (data.avg_first_token_ms ? (data.avg_first_token_ms / 1000).toFixed(2) : null);
+      const avgTps = data.today_avg_tps || data.avg_tps || null;
+      let timeParts = [`平均耗时: ${avgDur} s`];
+      if (avgFirst && parseFloat(avgFirst) > 0) {
+        timeParts.push(`均首字: ${avgFirst} s`);
+      }
+      if (avgTps && parseFloat(avgTps) > 0) {
+        timeParts.push(`均速: ${parseFloat(avgTps).toFixed(1)} t/s`);
+      }
+      $("kpi-today-avg-time").textContent = timeParts.join(" | ");
 
       const cachedTokens = data.total_cached_tokens || 0;
       const totalTokens = data.total_tokens || 0;
@@ -267,7 +277,17 @@ async function loadOverview() {
       $("kpi-today-sub").textContent = `输入: ${formatNumber(periodPrompt)}${cacheNote} | 输出: ${formatNumber(periodCompletion)}`;
 
       $("kpi-today-calls").textContent = formatNumber(data.period_calls || 0);
-      $("kpi-today-avg-time").textContent = `平均耗时: ${((data.period_avg_duration_ms || 0) / 1000).toFixed(2)} s`;
+      const pAvgDur = ((data.period_avg_duration_ms || 0) / 1000).toFixed(2);
+      const pAvgFirst = data.period_avg_first_token_ms ? (data.period_avg_first_token_ms / 1000).toFixed(2) : null;
+      const pAvgTps = data.period_avg_tps || null;
+      let pTimeParts = [`平均耗时: ${pAvgDur} s`];
+      if (pAvgFirst && parseFloat(pAvgFirst) > 0) {
+        pTimeParts.push(`均首字: ${pAvgFirst} s`);
+      }
+      if (pAvgTps && parseFloat(pAvgTps) > 0) {
+        pTimeParts.push(`均速: ${parseFloat(pAvgTps).toFixed(1)} t/s`);
+      }
+      $("kpi-today-avg-time").textContent = pTimeParts.join(" | ");
 
       const hitRate = periodTokens > 0 ? ((periodCached / periodTokens) * 100).toFixed(1) : "0.0";
       $("kpi-cached-tokens").textContent = formatNumber(periodCached);
@@ -380,9 +400,15 @@ async function loadModelsAndCallers() {
           const pct = periodTokens > 0 ? ((m.total_tokens / periodTokens) * 100).toFixed(1) : "0.0";
           const color = colors[idx % colors.length];
           const isTop = idx === 0;
+          const avgDur = m.avg_duration_ms ? (m.avg_duration_ms / 1000).toFixed(2) : "0.00";
+          const avgFirst = m.avg_first_token_ms ? (m.avg_first_token_ms / 1000).toFixed(2) : null;
+          const avgTps = m.avg_tps && m.avg_tps > 0 ? Number(m.avg_tps).toFixed(1) : null;
+          let mTooltip = `${m.model}\n总用量: ${formatNumber(m.total_tokens)} tokens (${pct}%)\n输入: ${formatNumber(m.prompt_tokens)}\n输出: ${formatNumber(m.completion_tokens)}\n缓存: ${formatNumber(m.cached_tokens)}\n调用次数: ${formatNumber(m.call_count)}\n平均耗时: ${avgDur}s`;
+          if (avgFirst && parseFloat(avgFirst) > 0) mTooltip += `\n平均首字: ${avgFirst}s`;
+          if (avgTps) mTooltip += `\n平均速度: ${avgTps} tokens/s`;
 
           return `
-            <div class="compact-row" title="${m.model}&#10;总用量: ${formatNumber(m.total_tokens)} tokens (${pct}%)&#10;输入: ${formatNumber(m.prompt_tokens)}&#10;输出: ${formatNumber(m.completion_tokens)}&#10;缓存: ${formatNumber(m.cached_tokens)}&#10;调用次数: ${formatNumber(m.call_count)}">
+            <div class="compact-row" title="${mTooltip}">
               <div class="row-left">
                 <span class="row-rank ${isTop ? 'rank-top' : ''}">#${idx + 1}</span>
                 <div class="model-chip" title="${m.model}">
@@ -391,6 +417,7 @@ async function loadModelsAndCallers() {
                 </div>
                 <div class="calls-col">
                   <span class="calls-badge">${formatNumber(m.call_count)} 次调用</span>
+                  ${avgTps ? `<span class="tag-tps-mini" title="平均生成速度">${avgTps} t/s</span>` : ''}
                 </div>
               </div>
               <div class="row-right">
@@ -503,9 +530,12 @@ function renderModelPieChart(models) {
     const strokeOffset = Math.max(0, circumference - strokeDash);
     const color = colors[idx % colors.length];
     const isTop = idx === 0;
+    const avgTps = m.avg_tps && m.avg_tps > 0 ? Number(m.avg_tps).toFixed(1) : null;
+    let cardTooltip = `${m.model}\n总消耗: ${formatNumber(m.total_tokens)} tokens (${pct}%)\n输入 (Prompt): ${formatNumber(m.prompt_tokens)}\n输出 (Completion): ${formatNumber(m.completion_tokens)}\n调用次数: ${formatNumber(m.call_count)}`;
+    if (avgTps) cardTooltip += `\n平均速度: ${avgTps} tokens/s`;
 
     return `
-      <div class="widget-card" title="${m.model}&#10;总消耗: ${formatNumber(m.total_tokens)} tokens (${pct}%)&#10;输入 (Prompt): ${formatNumber(m.prompt_tokens)}&#10;输出 (Completion): ${formatNumber(m.completion_tokens)}&#10;调用次数: ${formatNumber(m.call_count)}">
+      <div class="widget-card" title="${cardTooltip}">
         <div class="progress-circle-wrap">
           <svg viewBox="0 0 44 44">
             <circle class="circle-bg" cx="22" cy="22" r="18" />
@@ -528,6 +558,7 @@ function renderModelPieChart(models) {
           <div class="widget-sub-line">
             <span class="tag-io-p" title="输入 Token">入 ${formatCompactTokens(m.prompt_tokens)}</span>
             <span class="tag-io-c" title="输出 Token">出 ${formatCompactTokens(m.completion_tokens)}</span>
+            ${avgTps ? `<span class="tag-tps-mini" title="平均生成速度">${avgTps} t/s</span>` : ''}
           </div>
         </div>
       </div>
@@ -794,6 +825,23 @@ async function loadRecords(page = 1) {
 
       const durSec = (r.duration_ms || 0) / 1000;
       const isSlow = durSec > 10.0;
+      const firstSec = (r.first_token_ms || 0) / 1000;
+      const hasFirstToken = firstSec > 0;
+
+      let tpsVal = r.tps;
+      if (tpsVal === undefined || tpsVal === null || tpsVal <= 0) {
+        const comp = r.completion_tokens || 0;
+        if (comp > 0 && durSec > 0) {
+          if (firstSec > 0 && durSec > firstSec) {
+            tpsVal = comp / (durSec - firstSec);
+          } else {
+            tpsVal = comp / durSec;
+          }
+        } else {
+          tpsVal = 0;
+        }
+      }
+      const hasTps = tpsVal > 0 && !isEmbed && (r.completion_tokens > 0);
       const color = colors[idx % colors.length];
 
       // 提取纯时分秒，提高紧凑可读性
@@ -802,8 +850,16 @@ async function loadRecords(page = 1) {
         timeStr = timeStr.split(" ")[1];
       }
 
+      let rowTooltip = `${r.model}\n来源: ${r.caller_name}\n完整时戳: ${r.datetime_str}\n总用量: ${formatNumber(r.total_tokens)} tokens\n输入 (Prompt): ${formatNumber(r.prompt_tokens)}\n输出 (Completion): ${formatNumber(r.completion_tokens)}\n缓存 (Cached): ${formatNumber(r.cached_tokens)}\n总耗时: ${durSec.toFixed(2)}s`;
+      if (hasFirstToken) {
+        rowTooltip += `\n首字耗时: ${firstSec.toFixed(2)}s`;
+      }
+      if (hasTps) {
+        rowTooltip += `\n生成速度: ${Number(tpsVal).toFixed(1)} tokens/s`;
+      }
+
       return `
-        <div class="compact-row" title="${r.model}&#10;来源: ${r.caller_name}&#10;完整时戳: ${r.datetime_str}&#10;总用量: ${formatNumber(r.total_tokens)} tokens&#10;输入 (Prompt): ${formatNumber(r.prompt_tokens)}&#10;输出 (Completion): ${formatNumber(r.completion_tokens)}&#10;缓存 (Cached): ${formatNumber(r.cached_tokens)}&#10;耗时: ${durSec.toFixed(2)}s">
+        <div class="compact-row" title="${rowTooltip}">
           <div class="row-left">
             <span class="row-id">#${r.id}</span>
             <span class="row-time">${timeStr}</span>
@@ -826,7 +882,11 @@ async function loadRecords(page = 1) {
               <span class="split-c" title="输出 Token">出 ${formatNumber(r.completion_tokens)}</span>
               <span class="split-cached ${r.cached_tokens > 0 ? 'hit' : ''}" title="缓存 Token">缓 ${formatNumber(r.cached_tokens || 0)}</span>
             </div>
-            <span class="row-lat-pill ${isSlow ? 'lat-slow' : 'lat-normal'}">${durSec.toFixed(2)}s</span>
+            <div class="row-perf-group">
+              <span class="row-lat-pill ${isSlow ? 'lat-slow' : 'lat-normal'}" title="总耗时">${durSec.toFixed(2)}s</span>
+              ${hasFirstToken ? `<span class="row-ttft-pill" title="首字耗时 (TTFT)">首 ${firstSec.toFixed(2)}s</span>` : ''}
+              ${hasTps ? `<span class="row-tps-pill" title="生成速度 (Tokens/s)">${Number(tpsVal).toFixed(1)} t/s</span>` : ''}
+            </div>
           </div>
         </div>
       `;

@@ -50,7 +50,8 @@ class TrackerStore:
                     completion_tokens INTEGER NOT NULL DEFAULT 0,
                     cached_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
-                    duration_ms REAL NOT NULL DEFAULT 0.0
+                    duration_ms REAL NOT NULL DEFAULT 0.0,
+                    first_token_ms REAL NOT NULL DEFAULT 0.0
                 )
                 """
             )
@@ -66,6 +67,13 @@ class TrackerStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_records_caller ON token_records(caller_name)"
             )
+            # 兼容历史数据: 确保早期数据库表结构包含 first_token_ms 字段
+            try:
+                conn.execute(
+                    "ALTER TABLE token_records ADD COLUMN first_token_ms REAL NOT NULL DEFAULT 0.0"
+                )
+            except sqlite3.OperationalError:
+                pass
             # 兼容历史数据: 确保早期记录中 prompt_tokens 包含 cached_tokens
             conn.execute(
                 """
@@ -92,6 +100,7 @@ class TrackerStore:
         cached_tokens: int = 0,
         total_tokens: int = 0,
         duration_ms: float = 0.0,
+        first_token_ms: float = 0.0,
     ) -> int:
         now = time.time()
         dt = datetime.datetime.fromtimestamp(now)
@@ -119,8 +128,8 @@ class TrackerStore:
                             model, provider_id, caller_type, caller_name,
                             session_id, is_streaming, is_estimated,
                             prompt_tokens, completion_tokens, cached_tokens,
-                            total_tokens, duration_ms
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            total_tokens, duration_ms, first_token_ms
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             now,
@@ -139,6 +148,7 @@ class TrackerStore:
                             max(0, cached_tokens),
                             max(0, total_tokens),
                             max(0.0, float(duration_ms)),
+                            max(0.0, float(first_token_ms)),
                         ),
                     )
                     return cur.lastrowid or 0
@@ -171,6 +181,10 @@ class TrackerStore:
                             COUNT(DISTINCT model) as distinct_models,
                             COUNT(DISTINCT caller_name) as distinct_callers,
                             COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms,
+                            COALESCE(AVG(CASE WHEN first_token_ms > 0 THEN first_token_ms ELSE NULL END), 0.0) as avg_first_token_ms,
+                            COALESCE(AVG(CASE WHEN completion_tokens > 0 AND duration_ms > 0 THEN 
+                                (completion_tokens * 1000.0) / (CASE WHEN first_token_ms > 0 AND duration_ms > first_token_ms THEN (duration_ms - first_token_ms) ELSE duration_ms END)
+                                ELSE NULL END), 0.0) as avg_tps,
                             MIN(date_str) as earliest_date,
                             MAX(date_str) as latest_date,
                             MIN(datetime_str) as earliest_datetime,
@@ -188,7 +202,11 @@ class TrackerStore:
                             COALESCE(SUM(prompt_tokens), 0) as today_prompt,
                             COALESCE(SUM(completion_tokens), 0) as today_completion,
                             COALESCE(SUM(cached_tokens), 0) as today_cached,
-                            COALESCE(AVG(duration_ms), 0.0) as today_avg_duration
+                            COALESCE(AVG(duration_ms), 0.0) as today_avg_duration,
+                            COALESCE(AVG(CASE WHEN first_token_ms > 0 THEN first_token_ms ELSE NULL END), 0.0) as today_avg_first_token_ms,
+                            COALESCE(AVG(CASE WHEN completion_tokens > 0 AND duration_ms > 0 THEN 
+                                (completion_tokens * 1000.0) / (CASE WHEN first_token_ms > 0 AND duration_ms > first_token_ms THEN (duration_ms - first_token_ms) ELSE duration_ms END)
+                                ELSE NULL END), 0.0) as today_avg_tps
                         FROM token_records
                         WHERE date_str = ?
                         """,
@@ -242,6 +260,10 @@ class TrackerStore:
                             COUNT(DISTINCT model) as period_distinct_models,
                             COUNT(DISTINCT caller_name) as period_distinct_callers,
                             COALESCE(AVG(duration_ms), 0.0) as period_avg_duration,
+                            COALESCE(AVG(CASE WHEN first_token_ms > 0 THEN first_token_ms ELSE NULL END), 0.0) as period_avg_first_token_ms,
+                            COALESCE(AVG(CASE WHEN completion_tokens > 0 AND duration_ms > 0 THEN 
+                                (completion_tokens * 1000.0) / (CASE WHEN first_token_ms > 0 AND duration_ms > first_token_ms THEN (duration_ms - first_token_ms) ELSE duration_ms END)
+                                ELSE NULL END), 0.0) as period_avg_tps,
                             MIN(date_str) as period_earliest_date,
                             MAX(date_str) as period_latest_date,
                             MIN(datetime_str) as period_earliest_datetime,
@@ -261,12 +283,16 @@ class TrackerStore:
                         "distinct_models": int(total_row["distinct_models"]),
                         "distinct_callers": int(total_row["distinct_callers"]),
                         "avg_duration_ms": round(float(total_row["avg_duration_ms"]), 1),
+                        "avg_first_token_ms": round(float(total_row["avg_first_token_ms"] or 0.0), 1),
+                        "avg_tps": round(float(total_row["avg_tps"] or 0.0), 1),
                         "today_tokens": int(today_row["today_tokens"]),
                         "today_prompt_tokens": int(today_row["today_prompt"]),
                         "today_completion_tokens": int(today_row["today_completion"]),
                         "today_cached_tokens": int(today_row["today_cached"]),
                         "today_calls": int(today_row["today_calls"]),
                         "today_avg_duration_ms": round(float(today_row["today_avg_duration"]), 1),
+                        "today_avg_first_token_ms": round(float(today_row["today_avg_first_token_ms"] or 0.0), 1),
+                        "today_avg_tps": round(float(today_row["today_avg_tps"] or 0.0), 1),
                         "week_tokens": int(week_row["week_tokens"]),
                         "week_calls": int(week_row["week_calls"]),
                         "month_tokens": int(month_row["month_tokens"]),
@@ -280,6 +306,8 @@ class TrackerStore:
                         "period_distinct_models": int(period_row["period_distinct_models"]),
                         "period_distinct_callers": int(period_row["period_distinct_callers"]),
                         "period_avg_duration_ms": round(float(period_row["period_avg_duration"]), 1),
+                        "period_avg_first_token_ms": round(float(period_row["period_avg_first_token_ms"] or 0.0), 1),
+                        "period_avg_tps": round(float(period_row["period_avg_tps"] or 0.0), 1),
                         "start_date": total_row["earliest_date"] or "",
                         "end_date": total_row["latest_date"] or "",
                         "start_datetime": total_row["earliest_datetime"] or "",
@@ -322,7 +350,11 @@ class TrackerStore:
                             COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                             COALESCE(SUM(cached_tokens), 0) as cached_tokens,
                             COALESCE(SUM(total_tokens), 0) as total_tokens,
-                            COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms
+                            COALESCE(AVG(duration_ms), 0.0) as avg_duration_ms,
+                            COALESCE(AVG(CASE WHEN first_token_ms > 0 THEN first_token_ms ELSE NULL END), 0.0) as avg_first_token_ms,
+                            COALESCE(AVG(CASE WHEN completion_tokens > 0 AND duration_ms > 0 THEN 
+                                (completion_tokens * 1000.0) / (CASE WHEN first_token_ms > 0 AND duration_ms > first_token_ms THEN (duration_ms - first_token_ms) ELSE duration_ms END)
+                                ELSE NULL END), 0.0) as avg_tps
                         FROM token_records
                         {where_clause}
                         GROUP BY model
@@ -338,6 +370,8 @@ class TrackerStore:
                             "cached_tokens": int(row["cached_tokens"]),
                             "total_tokens": int(row["total_tokens"]),
                             "avg_duration_ms": round(float(row["avg_duration_ms"]), 1),
+                            "avg_first_token_ms": round(float(row["avg_first_token_ms"] or 0.0), 1),
+                            "avg_tps": round(float(row["avg_tps"] or 0.0), 1),
                         }
                         for row in rows
                     ]
@@ -666,14 +700,28 @@ class TrackerStore:
                             caller_type, caller_name, session_id,
                             is_streaming, is_estimated,
                             prompt_tokens, completion_tokens, cached_tokens,
-                            total_tokens, duration_ms
+                            total_tokens, duration_ms, first_token_ms
                         FROM token_records
                         {where_sql}
                         ORDER BY id DESC
                         LIMIT ? OFFSET ?
                     """
                     rows = conn.execute(query_sql, params + [safe_page_size, offset]).fetchall()
-                    items = [dict(row) for row in rows]
+                    items = []
+                    for row in rows:
+                        d = dict(row)
+                        dur = float(d.get("duration_ms") or 0.0)
+                        ft = float(d.get("first_token_ms") or 0.0)
+                        comp = int(d.get("completion_tokens") or 0)
+                        tps = 0.0
+                        if comp > 0 and dur > 0:
+                            if ft > 0 and dur > ft:
+                                decode_sec = (dur - ft) / 1000.0
+                                tps = round(comp / decode_sec, 1) if decode_sec > 0 else 0.0
+                            else:
+                                tps = round(comp / (dur / 1000.0), 1)
+                        d["tps"] = tps
+                        items.append(d)
 
                     return {
                         "total": total_count,

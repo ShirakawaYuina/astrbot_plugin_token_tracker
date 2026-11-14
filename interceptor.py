@@ -906,6 +906,8 @@ def ensure_all_interceptors(
                             token = _IS_TRACKING.set(True)
                             tok_caller = _CURRENT_CALLER.set(caller)
                             start_time = time.time()
+                            first_token_time: float | None = None
+                            first_chunk_time: float | None = None
                             session_id = kwargs.get("session_id") or ""
                             prompt = kwargs.get("prompt") or (args[0] if args else "")
                             contexts = kwargs.get("contexts")
@@ -917,6 +919,14 @@ def ensure_all_interceptors(
                             try:
                                 async for chunk in original_fn(self, *args, **kwargs):
                                     if chunk:
+                                        if first_token_time is None:
+                                            c_txt = getattr(chunk, "completion_text", "") or ""
+                                            r_txt = getattr(chunk, "reasoning_content", "") or ""
+                                            if c_txt or r_txt or (isinstance(chunk, str) and chunk.strip()):
+                                                first_token_time = time.time()
+                                            elif first_chunk_time is None:
+                                                first_chunk_time = time.time()
+
                                         accumulated_chunks.append(chunk)
                                         if getattr(chunk, "usage", None) or (
                                             getattr(chunk, "raw_completion", None) and getattr(chunk.raw_completion, "usage", None)
@@ -927,6 +937,12 @@ def ensure_all_interceptors(
                                 _CURRENT_CALLER.reset(tok_caller)
                                 _IS_TRACKING.reset(token)
                                 duration_ms = (time.time() - start_time) * 1000.0
+                                resolved_first_time = first_token_time or first_chunk_time
+                                first_token_ms = (
+                                    (resolved_first_time - start_time) * 1000.0
+                                    if resolved_first_time is not None
+                                    else 0.0
+                                )
                                 prompt_tok, comp_tok, cache_tok, tot_tok = 0, 0, 0, 0
                                 is_est = False
 
@@ -966,6 +982,7 @@ def ensure_all_interceptors(
                                             cached_tokens=cache_tok,
                                             total_tokens=tot_tok,
                                             duration_ms=duration_ms,
+                                            first_token_ms=first_token_ms,
                                         )
                                     )
 

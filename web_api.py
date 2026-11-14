@@ -230,9 +230,13 @@ class TokenTrackerWebApi:
                 "输出 Token",
                 "缓存 Token",
                 "总计 Token",
-                "响应耗时(s)",
+                "总耗时(s)",
+                "首字耗时(s)",
+                "生成速率(Tokens/s)",
             ])
             for r in items:
+                ft_sec = r.get("first_token_ms", 0) / 1000.0 if r.get("first_token_ms") else 0.0
+                tps = r.get("tps", 0.0)
                 writer.writerow([
                     r.get("id"),
                     r.get("datetime_str"),
@@ -248,6 +252,8 @@ class TokenTrackerWebApi:
                     r.get("cached_tokens"),
                     r.get("total_tokens"),
                     f"{r.get('duration_ms', 0) / 1000.0:.2f}",
+                    f"{ft_sec:.2f}" if ft_sec > 0 else "-",
+                    f"{tps:.1f}" if tps > 0 else "-",
                 ])
 
             content = buf.getvalue().encode("utf-8-sig")

@@ -1197,6 +1197,15 @@ body.dashboard-body {
   border-radius: 3px;
 }
 
+.row-perf-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 195px;
+  flex-shrink: 0;
+}
+
 .row-lat-pill {
   font-size: 0.74rem;
   font-weight: 700;
@@ -1209,6 +1218,56 @@ body.dashboard-body {
 
 .lat-normal { background: #f0fdf4; color: #16a34a; }
 .lat-slow { background: #fef2f2; color: #dc2626; font-weight: 800; }
+
+.row-ttft-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+  font-feature-settings: "tnum";
+}
+
+.row-tps-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  white-space: nowrap;
+  font-feature-settings: "tnum";
+}
+
+html[data-theme="dark"] .row-tps-pill,
+body.dark .row-tps-pill {
+  background: rgba(66, 165, 245, 0.16);
+  color: #60a5fa;
+  border-color: rgba(66, 165, 245, 0.25);
+}
+
+.tag-tps-mini {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  white-space: nowrap;
+  font-feature-settings: "tnum";
+}
+
+html[data-theme="dark"] .tag-tps-mini,
+body.dark .tag-tps-mini {
+  background: rgba(66, 165, 245, 0.16);
+  color: #60a5fa;
+  border-color: rgba(66, 165, 245, 0.25);
+}
 
 .row-pct-pill {
   font-size: 0.75rem;
@@ -1541,13 +1600,23 @@ body.dashboard-body {
     justify-content: flex-start;
   }
 
-  .row-lat-pill, .row-pct-pill {
+  .row-perf-group {
+    order: 2;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .row-lat-pill, .row-ttft-pill, .row-tps-pill, .row-pct-pill {
     order: 2;
     width: auto;
     font-size: 0.7rem;
-    padding: 2px 7px;
-    margin-left: auto;
-    min-width: 44px;
+    padding: 2px 6px;
+    min-width: 36px;
   }
 
   .row-io-split {
