@@ -11,6 +11,7 @@ from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .interceptor import (
+    ensure_all_interceptors,
     ensure_image_gateway_interceptor,
     install_interceptor,
     uninstall_interceptor,
@@ -40,8 +41,9 @@ class Main(star.Star):
 
         cfg = self._cfg()
         if cfg.tracker.enable:
-            install_interceptor(self.store, self._cfg)
+            install_interceptor(self.store, self._cfg, self.context)
             self._watchdog_task = asyncio.create_task(self._interceptor_watchdog())
+            self._hook_provider_manager()
         else:
             logger.info("token-tracker | Tracker is disabled in configuration.")
 
@@ -58,6 +60,44 @@ class Main(star.Star):
     def _cfg(self) -> PluginConfig:
         return parse_plugin_config(self.config)
 
+    def _hook_provider_manager(self) -> None:
+        """挂载 ProviderManager 钩子：当 AstrBot 动态添加、切换或重载提供商实例时，立即动态补齐拦截器。"""
+        try:
+            if hasattr(self.context, "provider_manager") and self.context.provider_manager:
+                pm = self.context.provider_manager
+                # 1. 注册提供商切换/变更通知钩子
+                if hasattr(pm, "register_provider_change_hook"):
+                    pm.register_provider_change_hook(self._on_provider_changed)
+
+                # 2. 对 load_provider 进行切面包装：当新模型配置载入并生成实例后，立即自动挂载拦截器
+                if hasattr(pm, "load_provider") and not getattr(pm.load_provider, "_is_token_tracker_hook", False):
+                    orig_load_provider = pm.load_provider
+
+                    async def hooked_load_provider(*args: Any, **kwargs: Any) -> Any:
+                        res = await orig_load_provider(*args, **kwargs)
+                        try:
+                            cfg = self._cfg()
+                            if cfg.tracker.enable:
+                                ensure_all_interceptors(self.store, self._cfg, self.context)
+                        except Exception as hook_err:
+                            logger.debug("token-tracker | post load_provider hook error: %s", hook_err)
+                        return res
+
+                    hooked_load_provider._is_token_tracker_hook = True
+                    hooked_load_provider._orig_load_provider = orig_load_provider
+                    pm.load_provider = hooked_load_provider
+        except Exception as e:
+            logger.debug("token-tracker | hook provider manager error: %s", e)
+
+    def _on_provider_changed(self, provider_id: str, provider_type: Any, umo: str | None = None) -> None:
+        """当 AstrBot 切换会话或全局 Provider 时触发，确保新选中的提供商方法已被挂载。"""
+        try:
+            cfg = self._cfg()
+            if cfg.tracker.enable:
+                ensure_all_interceptors(self.store, self._cfg, self.context)
+        except Exception as e:
+            logger.debug("token-tracker | on_provider_changed error: %s", e)
+
     async def terminate(self) -> None:
         logger.info("token-tracker | Plugin terminating...")
         if self._watchdog_task and not self._watchdog_task.done():
@@ -66,17 +106,26 @@ class Main(star.Star):
                 await self._watchdog_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+        try:
+            if hasattr(self.context, "provider_manager") and self.context.provider_manager:
+                pm = self.context.provider_manager
+                if hasattr(pm, "load_provider") and getattr(pm.load_provider, "_is_token_tracker_hook", False):
+                    pm.load_provider = getattr(pm.load_provider, "_orig_load_provider", pm.load_provider)
+        except Exception:
+            pass
+
         uninstall_interceptor()
         logger.info("token-tracker | Plugin terminated.")
 
     async def _interceptor_watchdog(self) -> None:
-        """后台轻量巡检协程：定时检查第三方插件是否被热重载，必要时自动重新挂载拦截器。"""
+        """后台轻量巡检协程：定时检查第三方插件或新添加的模型提供商，自动重新挂载拦截器。"""
         while True:
             try:
                 await asyncio.sleep(5)
                 cfg = self._cfg()
-                if cfg.tracker.enable and getattr(cfg.tracker, "record_image", True):
-                    ensure_image_gateway_interceptor(self.store, self._cfg)
+                if cfg.tracker.enable:
+                    ensure_all_interceptors(self.store, self._cfg, self.context)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -87,14 +136,14 @@ class Main(star.Star):
         """当 AstrBot 中有任何插件加载或热重载时触发，立即同步检查并修补拦截器。"""
         cfg = self._cfg()
         if cfg.tracker.enable:
-            ensure_image_gateway_interceptor(self.store, self._cfg)
+            ensure_all_interceptors(self.store, self._cfg, self.context)
 
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent) -> None:
         """消息处理流程中轻量自检，确保切面有效。"""
         cfg = self._cfg()
         if cfg.tracker.enable:
-            ensure_image_gateway_interceptor(self.store, self._cfg)
+            ensure_all_interceptors(self.store, self._cfg, self.context)
 
     @filter.command("token", alias={"tokens"})
     async def token_command(

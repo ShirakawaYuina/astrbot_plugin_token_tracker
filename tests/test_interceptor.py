@@ -754,4 +754,70 @@ async def fake_caller(provider):
         uninstall_interceptor()
 
 
+@pytest.mark.asyncio
+async def test_dynamic_new_provider_interception_without_reload():
+    """测试在拦截器已安装后动态载入新模型提供商类，ensure_all_interceptors 可自动增量打补丁而无需重载插件"""
+    from astrbot.api.provider import Provider
+    from astrbot.core.provider.entities import LLMResponse, TokenUsage
+    from astrbot_plugin_token_tracker.interceptor import ensure_all_interceptors
+
+    mock_store = MagicMock()
+    mock_store.record_usage = AsyncMock()
+
+    cfg = PluginConfig()
+    uninstall_interceptor()
+    try:
+        # 1. 首次初始化拦截器
+        install_interceptor(mock_store, lambda: cfg)
+
+        # 2. 模拟运行时由 AstrBot 动态加载的新提供商类（在此之前不存在于已打补丁的类中）
+        class MockLateLoadedProvider(Provider):
+            def __init__(self):
+                self.model = "late-loaded-model-v1"
+                self.model_name = "late-loaded-model-v1"
+                self.provider_config = {"id": "late-provider-id", "model": "late-loaded-model-v1"}
+
+            def get_current_key(self):
+                return "test-key"
+
+            def get_models(self):
+                return ["late-loaded-model-v1"]
+
+            def set_key(self, key):
+                pass
+
+            async def text_chat(self, *args, **kwargs):
+                resp = LLMResponse("assistant")
+                resp.usage = TokenUsage(input_other=50, input_cached=0, output=20)
+                return resp
+
+        # 验证在新类刚定义时，尚未被拦截器打上包装标记
+        assert not getattr(MockLateLoadedProvider.text_chat, "_is_token_tracker_wrapper", False)
+
+        # 3. 模拟巡检机制或 load_provider 钩子触发 ensure_all_interceptors
+        newly_patched = ensure_all_interceptors(mock_store, lambda: cfg)
+        assert newly_patched >= 1
+        assert getattr(MockLateLoadedProvider.text_chat, "_is_token_tracker_wrapper", False)
+
+        # 4. 执行调用，验证无需重载插件即可精确统计到该新模型的 Token
+        inst = MockLateLoadedProvider()
+        resp = await inst.text_chat(prompt="Hello late model")
+        assert resp is not None
+
+        await asyncio.sleep(0.05)
+        assert mock_store.record_usage.called
+        call_kwargs = mock_store.record_usage.call_args.kwargs
+        assert call_kwargs["model"] == "late-loaded-model-v1"
+        assert call_kwargs["provider_id"] == "late-provider-id"
+        assert call_kwargs["prompt_tokens"] == 50
+        assert call_kwargs["completion_tokens"] == 20
+        assert call_kwargs["total_tokens"] == 70
+
+        # 5. 再次调用 ensure_all_interceptors，验证幂等性（不会重复打补丁）
+        second_run_patched = ensure_all_interceptors(mock_store, lambda: cfg)
+        assert second_run_patched == 0
+    finally:
+        uninstall_interceptor()
+
+
 
