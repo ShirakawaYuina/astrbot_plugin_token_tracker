@@ -853,6 +853,8 @@ async function loadRecords(page = 1) {
       let rowTooltip = `${r.model}\n来源: ${r.caller_name}\n完整时戳: ${r.datetime_str}\n总用量: ${formatNumber(r.total_tokens)} tokens\n输入 (Prompt): ${formatNumber(r.prompt_tokens)}\n输出 (Completion): ${formatNumber(r.completion_tokens)}\n缓存 (Cached): ${formatNumber(r.cached_tokens)}\n总耗时: ${durSec.toFixed(2)}s`;
       if (hasFirstToken) {
         rowTooltip += `\n首字耗时: ${firstSec.toFixed(2)}s`;
+      } else if (!isEmbed && (r.completion_tokens > 0)) {
+        rowTooltip += `\n首字耗时: - (非流式常规调用)`;
       }
       if (hasTps) {
         rowTooltip += `\n生成速度: ${Number(tpsVal).toFixed(1)} tokens/s`;
